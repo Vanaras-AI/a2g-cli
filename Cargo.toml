@@ -10,6 +10,10 @@ repository = "https://github.com/Vanaras-AI/A2G"
 name = "a2g"
 path = "src/main.rs"
 
+[lib]
+name = "a2g"
+path = "src/lib.rs"
+
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
