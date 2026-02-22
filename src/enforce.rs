@@ -45,6 +45,14 @@ pub struct Verdict {
     pub decision: Decision,
     pub policy_rule: String,
     pub evaluated_at: DateTime<Utc>,
+    pub mandate_hash: String,
+    pub proposal_hash: String,
+    pub delegation_chain_hash: String,
+    pub issuer_did: String,
+    pub authority_level: String,
+    pub scope_hash: String,
+    pub correlation_id: String,
+    pub parent_receipt_hash: String,
 }
 
 /// Run the deterministic enforcement pipeline
@@ -65,6 +73,11 @@ pub fn enforce(
     let agent_did = m.mandate.agent_did.clone();
     let agent_name = m.mandate.agent_name.clone();
 
+    // ── Step 0: Revocation Check (S1 FIX) ──
+    // Compute mandate_hash early for both revocation check and verdict
+    let mandate_hash = hex::encode(Sha256::digest(mandate_str.as_bytes()));
+    let proposal_hash = m.mandate.proposal_hash.clone();
+
     let make_verdict = |decision: Decision, rule: &str| -> Verdict {
         Verdict {
             verdict_id: uuid::Uuid::new_v4().to_string(),
@@ -75,6 +88,14 @@ pub fn enforce(
             decision,
             policy_rule: rule.to_string(),
             evaluated_at: now,
+            mandate_hash: mandate_hash.clone(),
+            proposal_hash: proposal_hash.clone(),
+            delegation_chain_hash: String::new(),
+            issuer_did: String::new(),
+            authority_level: String::new(),
+            scope_hash: String::new(),
+            correlation_id: String::new(),
+            parent_receipt_hash: String::new(),
         }
     };
 
@@ -85,9 +106,6 @@ pub fn enforce(
             "invalid_request: tool name must not be empty",
         ));
     }
-
-    // ── Step 0: Revocation Check (S1 FIX) ──
-    let mandate_hash = hex::encode(Sha256::digest(mandate_str.as_bytes()));
     if ledger.is_revoked(&m.mandate.agent_did, &mandate_hash)? {
         return Ok(make_verdict(
             Decision::Deny,

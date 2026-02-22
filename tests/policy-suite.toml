@@ -1,0 +1,96 @@
+# A2G Golden Case Test Suite — Declarative Policy Tests
+# Run with: a2g test --suite tests/policy-suite.toml --ledger :memory:
+#
+# Each test runs through the real enforcement pipeline.
+# Unsigned mandates are always DENY (signature verification is Phase 0).
+
+[suite]
+name = "A2G Policy Golden Cases"
+description = "Core enforcement invariants for the A2G governance protocol"
+
+# ─── Signature / Identity Tests ──────────────────────────────────────────────
+
+[[test]]
+test_id = "T001-unsigned-denied"
+description = "Unsigned mandate (empty signature) should be denied"
+tool = "read_file"
+params = '{"path": "/data/test.csv"}'
+expected_decision = "DENY"
+tags = ["signature", "golden-case"]
+mandate_inline = """
+[mandate]
+version = "1.0"
+agent_did = "did:a2g:test"
+agent_name = "test-agent"
+issuer = "did:a2g:issuer"
+issued_at = "2025-01-01T00:00:00Z"
+expires_at = "2099-01-01T00:00:00Z"
+mandate_hash = ""
+signature = ""
+signer_pubkey = ""
+proposal_hash = ""
+
+[capabilities]
+tools = ["read_file", "write_file"]
+
+[boundaries]
+fs_allow = ["/data"]
+fs_deny = ["/etc", "/root"]
+net_allow = []
+net_deny = []
+cmd_allow = []
+cmd_deny = []
+
+[limits]
+max_calls_per_minute = 60
+max_payload_bytes = 1048576
+"""
+
+# ─── Tool Authorization Tests ────────────────────────────────────────────────
+
+[[test]]
+test_id = "T002-unauthorized-tool"
+description = "Tool not in capabilities list should be denied"
+tool = "delete_file"
+params = '{"path": "/data/test.csv"}'
+expected_decision = "DENY"
+tags = ["authorization", "golden-case"]
+mandate_inline = """
+[mandate]
+version = "1.0"
+agent_did = "did:a2g:test"
+agent_name = "test-agent"
+issuer = "did:a2g:issuer"
+issued_at = "2025-01-01T00:00:00Z"
+expires_at = "2099-01-01T00:00:00Z"
+mandate_hash = ""
+signature = ""
+signer_pubkey = ""
+proposal_hash = ""
+
+[capabilities]
+tools = ["read_file"]
+
+[boundaries]
+fs_allow = ["/data"]
+fs_deny = ["/etc"]
+net_allow = []
+net_deny = []
+cmd_allow = []
+cmd_deny = []
+
+[limits]
+max_calls_per_minute = 60
+max_payload_bytes = 1048576
+"""
+
+# ─── Malformed Mandate Tests ────────────────────────────────────────────────
+
+[[test]]
+test_id = "T003-malformed-toml"
+description = "Invalid TOML should produce error"
+tool = "read_file"
+params = '{"path": "/data/test.csv"}'
+expected_decision = "ERROR"
+tags = ["validation", "golden-case"]
+mandate_inline = "this is not valid toml {"

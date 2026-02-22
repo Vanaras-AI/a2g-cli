@@ -115,6 +115,10 @@ pub struct Review {
     pub reviewed_at: String,
     pub signature: String,
     pub reviewer_pubkey: String,
+    #[serde(default)]
+    pub mandate_view_hash: String,
+    #[serde(default)]
+    pub approval_context_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -263,11 +267,17 @@ pub fn review_proposal(
     let now = Utc::now();
     let review_id = uuid::Uuid::new_v4().to_string();
 
-    // Sign the review with domain separation
+    // Phase 3: Capture what the reviewer saw
+    let mandate_view_hash = hex::encode(Sha256::digest(proposal.mandate_body.as_bytes()));
+    let approval_context_hash = hex::encode(Sha256::digest(
+        format!("{}:{}:{}", mandate_view_hash, proposal.risk_level, proposal.proposal_hash).as_bytes()
+    ));
+
+    // Sign the review with domain separation (includes mandate_view_hash)
     let review_data = format!(
-        "{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}",
         review_id, reviewer_did, proposal.proposal_hash,
-        decision, reason, now.to_rfc3339(),
+        decision, reason, now.to_rfc3339(), mandate_view_hash,
     );
     let review_payload = format!("REVIEW:{}", review_data);
     let sig = signing_key.sign(review_payload.as_bytes());
@@ -281,6 +291,8 @@ pub fn review_proposal(
         reviewed_at: now.to_rfc3339(),
         signature: hex::encode(sig.to_bytes()),
         reviewer_pubkey: pubkey_hex,
+        mandate_view_hash,
+        approval_context_hash,
     };
 
     proposal.reviews.push(review.clone());
@@ -319,9 +331,9 @@ pub fn verify_review(review: &Review, proposal_hash: &str) -> Result<(), Box<dyn
     let signature = Signature::from_bytes(&sig_arr);
 
     let review_data = format!(
-        "{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}",
         review.review_id, review.reviewer_did, proposal_hash,
-        review.decision, review.reason, review.reviewed_at,
+        review.decision, review.reason, review.reviewed_at, review.mandate_view_hash,
     );
     let review_payload = format!("REVIEW:{}", review_data);
 

@@ -23,6 +23,14 @@ pub struct LedgerEntry {
     pub policy_rule: String,
     pub timestamp: String,
     pub receipt_hash: String,
+    pub mandate_hash: String,
+    pub proposal_hash: String,
+    pub delegation_chain_hash: String,
+    pub issuer_did: String,
+    pub authority_level: String,
+    pub scope_hash: String,
+    pub correlation_id: String,
+    pub parent_receipt_hash: String,
 }
 
 /// A single authority log entry for display
@@ -67,7 +75,15 @@ impl Ledger {
                 policy_hash    TEXT NOT NULL,
                 timestamp      TEXT NOT NULL,
                 prev_hash      TEXT NOT NULL,
-                receipt_hash   TEXT NOT NULL
+                receipt_hash   TEXT NOT NULL,
+                mandate_hash   TEXT DEFAULT '',
+                proposal_hash  TEXT DEFAULT '',
+                delegation_chain_hash TEXT DEFAULT '',
+                issuer_did     TEXT DEFAULT '',
+                authority_level TEXT DEFAULT '',
+                scope_hash     TEXT DEFAULT '',
+                correlation_id TEXT DEFAULT '',
+                parent_receipt_hash TEXT DEFAULT ''
             );
 
             CREATE INDEX IF NOT EXISTS idx_agent_did ON decisions(agent_did);
@@ -86,9 +102,51 @@ impl Ledger {
             );
 
             CREATE INDEX IF NOT EXISTS idx_revocations_agent ON revocations(agent_did);
-            CREATE INDEX IF NOT EXISTS idx_revocations_hash ON revocations(mandate_hash);
+            CREATE INDEX IF NOT EXISTS idx_revocations_hash ON revocations(mandate_hash);"
+        )?;
 
-            -- S5 FIX: Enforce append-only via triggers that prevent UPDATE and DELETE
+        // Phase 1-4: Lineage columns migration
+        let migrations = [
+            "ALTER TABLE decisions ADD COLUMN mandate_hash TEXT DEFAULT ''",
+            "ALTER TABLE decisions ADD COLUMN proposal_hash TEXT DEFAULT ''",
+            "ALTER TABLE decisions ADD COLUMN delegation_chain_hash TEXT DEFAULT ''",
+            "ALTER TABLE decisions ADD COLUMN issuer_did TEXT DEFAULT ''",
+            "ALTER TABLE decisions ADD COLUMN authority_level TEXT DEFAULT ''",
+            "ALTER TABLE decisions ADD COLUMN scope_hash TEXT DEFAULT ''",
+            "ALTER TABLE decisions ADD COLUMN correlation_id TEXT DEFAULT ''",
+            "ALTER TABLE decisions ADD COLUMN parent_receipt_hash TEXT DEFAULT ''",
+        ];
+        for sql in &migrations {
+            let _ = conn.execute(sql, []); // Ignore "duplicate column" errors
+        }
+        // Indexes for lineage queries
+        let _ = conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_mandate_hash ON decisions(mandate_hash);
+             CREATE INDEX IF NOT EXISTS idx_correlation_id ON decisions(correlation_id);
+             CREATE INDEX IF NOT EXISTS idx_issuer_did ON decisions(issuer_did);"
+        );
+
+        // Phase 3: Proposal history table
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS proposal_history (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                proposal_id TEXT NOT NULL UNIQUE,
+                proposer_did TEXT NOT NULL,
+                mandate_hash TEXT NOT NULL,
+                proposal_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                risk_level TEXT NOT NULL DEFAULT '',
+                required_approvals INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                approved_at TEXT DEFAULT NULL,
+                approval_context_hash TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_proposal_id ON proposal_history(proposal_id);"
+        )?;
+
+        // Re-enable triggers
+        conn.execute_batch(
+            "-- S5 FIX: Enforce append-only via triggers that prevent UPDATE and DELETE
             CREATE TRIGGER IF NOT EXISTS prevent_decision_update
                 BEFORE UPDATE ON decisions
                 BEGIN
@@ -298,8 +356,11 @@ impl Ledger {
             "INSERT INTO decisions (
                 receipt_id, verdict_id, agent_did, agent_name,
                 tool, params_hash, decision, policy_rule,
-                policy_hash, timestamp, prev_hash, receipt_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                policy_hash, timestamp, prev_hash, receipt_hash,
+                mandate_hash, proposal_hash, delegation_chain_hash,
+                issuer_did, authority_level, scope_hash,
+                correlation_id, parent_receipt_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 receipt.receipt_id,
                 verdict.verdict_id,
@@ -313,6 +374,14 @@ impl Ledger {
                 receipt.timestamp,
                 receipt.prev_hash,
                 receipt.receipt_hash,
+                receipt.mandate_hash,
+                receipt.proposal_hash,
+                receipt.delegation_chain_hash,
+                receipt.issuer_did,
+                receipt.authority_level,
+                receipt.scope_hash,
+                receipt.correlation_id,
+                receipt.parent_receipt_hash,
             ],
         )?;
 
@@ -345,8 +414,11 @@ impl Ledger {
             "INSERT INTO decisions (
                 receipt_id, verdict_id, agent_did, agent_name,
                 tool, params_hash, decision, policy_rule,
-                policy_hash, timestamp, prev_hash, receipt_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                policy_hash, timestamp, prev_hash, receipt_hash,
+                mandate_hash, proposal_hash, delegation_chain_hash,
+                issuer_did, authority_level, scope_hash,
+                correlation_id, parent_receipt_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 receipt.receipt_id, verdict.verdict_id,
                 verdict.agent_did, verdict.agent_name,
@@ -354,6 +426,10 @@ impl Ledger {
                 verdict.decision.to_string(), verdict.policy_rule,
                 receipt.policy_hash, receipt.timestamp,
                 receipt.prev_hash, receipt.receipt_hash,
+                receipt.mandate_hash, receipt.proposal_hash,
+                receipt.delegation_chain_hash, receipt.issuer_did,
+                receipt.authority_level, receipt.scope_hash,
+                receipt.correlation_id, receipt.parent_receipt_hash,
             ],
         )?;
 
@@ -388,7 +464,10 @@ impl Ledger {
     ) -> Result<Vec<LedgerEntry>, Box<dyn std::error::Error>> {
         let mut sql = String::from(
             "SELECT seq, receipt_id, agent_did, agent_name, tool, params_hash,
-                    decision, policy_rule, timestamp, receipt_hash
+                    decision, policy_rule, timestamp, receipt_hash,
+                    mandate_hash, proposal_hash, delegation_chain_hash,
+                    issuer_did, authority_level, scope_hash,
+                    correlation_id, parent_receipt_hash
              FROM decisions WHERE 1=1",
         );
         let mut bind_values: Vec<String> = Vec::new();
@@ -422,11 +501,64 @@ impl Ledger {
                     policy_rule: row.get(7)?,
                     timestamp: row.get(8)?,
                     receipt_hash: row.get(9)?,
+                    mandate_hash: row.get(10)?,
+                    proposal_hash: row.get(11)?,
+                    delegation_chain_hash: row.get(12)?,
+                    issuer_did: row.get(13)?,
+                    authority_level: row.get(14)?,
+                    scope_hash: row.get(15)?,
+                    correlation_id: row.get(16)?,
+                    parent_receipt_hash: row.get(17)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(entries)
+    }
+
+    /// Log a proposal to the proposal_history table
+    pub fn log_proposal(&self, proposal_id: &str, proposer_did: &str, mandate_hash: &str, proposal_hash: &str, status: &str, risk_level: &str, required_approvals: usize, created_at: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.conn.execute(
+            "INSERT INTO proposal_history (proposal_id, proposer_did, mandate_hash, proposal_hash, status, risk_level, required_approvals, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![proposal_id, proposer_did, mandate_hash, proposal_hash, status, risk_level, required_approvals as i64, created_at],
+        )?;
+        Ok(())
+    }
+
+    /// Query a decision by receipt ID or receipt hash
+    pub fn query_decision_by_id(&self, receipt_id_or_hash: &str) -> Result<Option<LedgerEntry>, Box<dyn std::error::Error>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, receipt_id, agent_did, agent_name, tool, params_hash,
+                    decision, policy_rule, timestamp, receipt_hash,
+                    mandate_hash, proposal_hash, delegation_chain_hash,
+                    issuer_did, authority_level, scope_hash,
+                    correlation_id, parent_receipt_hash
+             FROM decisions WHERE receipt_id = ?1 OR receipt_hash = ?1 LIMIT 1"
+        )?;
+        let result = stmt.query_row(params![receipt_id_or_hash], |row| {
+            Ok(LedgerEntry {
+                seq: row.get(0)?,
+                receipt_id: row.get(1)?,
+                agent_did: row.get(2)?,
+                agent_name: row.get(3)?,
+                tool: row.get(4)?,
+                params_hash: row.get(5)?,
+                decision: row.get(6)?,
+                policy_rule: row.get(7)?,
+                timestamp: row.get(8)?,
+                receipt_hash: row.get(9)?,
+                mandate_hash: row.get(10)?,
+                proposal_hash: row.get(11)?,
+                delegation_chain_hash: row.get(12)?,
+                issuer_did: row.get(13)?,
+                authority_level: row.get(14)?,
+                scope_hash: row.get(15)?,
+                correlation_id: row.get(16)?,
+                parent_receipt_hash: row.get(17)?,
+            })
+        }).optional()?;
+        Ok(result)
     }
 
     /// Get the last receipt hash in the ledger (for chain linking across process restarts)
@@ -482,6 +614,65 @@ impl Ledger {
 
         Ok((true, entries.len()))
     }
+
+    /// Query decisions for a specific agent within a time window
+    pub fn query_window(
+        &self,
+        agent_did: &str,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<LedgerEntry>, Box<dyn std::error::Error>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, receipt_id, agent_did, agent_name, tool, params_hash,
+                    decision, policy_rule, timestamp, receipt_hash,
+                    mandate_hash, proposal_hash, delegation_chain_hash,
+                    issuer_did, authority_level, scope_hash,
+                    correlation_id, parent_receipt_hash
+             FROM decisions
+             WHERE agent_did = ?1 AND timestamp >= ?2 AND timestamp <= ?3
+             ORDER BY seq ASC"
+        )?;
+
+        let entries = stmt.query_map(params![agent_did, start, end], |row| {
+            Ok(LedgerEntry {
+                seq: row.get(0)?,
+                receipt_id: row.get(1)?,
+                agent_did: row.get(2)?,
+                agent_name: row.get(3)?,
+                tool: row.get(4)?,
+                params_hash: row.get(5)?,
+                decision: row.get(6)?,
+                policy_rule: row.get(7)?,
+                timestamp: row.get(8)?,
+                receipt_hash: row.get(9)?,
+                mandate_hash: row.get(10)?,
+                proposal_hash: row.get(11)?,
+                delegation_chain_hash: row.get(12)?,
+                issuer_did: row.get(13)?,
+                authority_level: row.get(14)?,
+                scope_hash: row.get(15)?,
+                correlation_id: row.get(16)?,
+                parent_receipt_hash: row.get(17)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(entries)
+    }
+
+    /// Count decisions for a specific agent within a time window (fast check)
+    pub fn count_window(
+        &self,
+        agent_did: &str,
+        start: &str,
+        end: &str,
+    ) -> Result<i64, Box<dyn std::error::Error>> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM decisions WHERE agent_did = ?1 AND timestamp >= ?2 AND timestamp <= ?3",
+            params![agent_did, start, end],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
@@ -506,6 +697,14 @@ mod tests {
             decision,
             policy_rule: "test_rule".to_string(),
             evaluated_at: Utc::now(),
+            mandate_hash: String::new(),
+            proposal_hash: String::new(),
+            delegation_chain_hash: String::new(),
+            issuer_did: String::new(),
+            authority_level: String::new(),
+            scope_hash: String::new(),
+            correlation_id: String::new(),
+            parent_receipt_hash: String::new(),
         }
     }
 

@@ -16,6 +16,9 @@ mod ledger;
 mod output_gov;
 mod authority;
 mod proposal;
+mod test_harness;
+mod lineage;
+mod trust_summary;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -132,6 +135,12 @@ enum Commands {
         /// Comma-separated paths to authority delegation JSON files (chain validation)
         #[arg(long)]
         authority_chain: Option<String>,
+        /// Correlation ID for cross-vendor tracing (UUID)
+        #[arg(long)]
+        correlation_id: Option<String>,
+        /// Parent receipt hash (from triggering receipt)
+        #[arg(long)]
+        parent_receipt: Option<String>,
     },
     /// Verify a governance receipt
     Receipt {
@@ -307,6 +316,60 @@ enum Commands {
         #[arg(long)]
         reason: String,
     },
+    /// Run declarative policy tests (golden cases)
+    Test {
+        /// Path to test suite (TOML or JSON)
+        #[arg(long)]
+        suite: PathBuf,
+        /// Path to ledger database (use :memory: for isolation)
+        #[arg(long, default_value = ":memory:")]
+        ledger: PathBuf,
+        /// Filter tests by tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Reconstruct and verify execution lineage from a receipt
+    VerifyLineage {
+        /// Receipt ID or receipt hash
+        #[arg(long)]
+        receipt: String,
+        /// Path to ledger database
+        #[arg(long, default_value = "a2g_ledger.db")]
+        ledger: PathBuf,
+    },
+    /// Compress governance history into a signed trust summary
+    Compress {
+        /// Agent DID to compress
+        #[arg(long)]
+        agent: String,
+        /// Window start (ISO 8601 / RFC 3339)
+        #[arg(long)]
+        start: String,
+        /// Window end (ISO 8601 / RFC 3339)
+        #[arg(long)]
+        end: String,
+        /// Path to ledger database
+        #[arg(long, default_value = "a2g_ledger.db")]
+        ledger: PathBuf,
+        /// Path to ed25519 secret key for signing
+        #[arg(long)]
+        key: PathBuf,
+        /// Human-readable issuer name
+        #[arg(long)]
+        issuer_name: String,
+        /// Output path for signed summary JSON
+        #[arg(long)]
+        out: PathBuf,
+        /// Minimum decisions required (default 1)
+        #[arg(long, default_value = "1")]
+        min_decisions: u64,
+    },
+    /// Verify a trust summary's integrity and signature
+    VerifySummary {
+        /// Path to trust summary JSON file
+        #[arg(long)]
+        summary: PathBuf,
+    },
 }
 
 fn main() {
@@ -318,8 +381,8 @@ fn main() {
         Commands::Sovereign { out } => cmd_sovereign(&out, output_format),
         Commands::Sign { mandate, key, ttl, proposal, skip_proposal } => cmd_sign(&mandate, &key, ttl, proposal, skip_proposal, output_format),
         Commands::Verify { mandate } => cmd_verify(&mandate, output_format),
-        Commands::Enforce { mandate, tool, params, ledger, authority_chain } => {
-            cmd_enforce(&mandate, &tool, &params, &ledger, authority_chain, output_format)
+        Commands::Enforce { mandate, tool, params, ledger, authority_chain, correlation_id, parent_receipt } => {
+            cmd_enforce(&mandate, &tool, &params, &ledger, authority_chain, correlation_id, parent_receipt, output_format)
         }
         Commands::Receipt { receipt, engine_key } => cmd_receipt(&receipt, &engine_key, output_format),
         Commands::Revoke { mandate, ledger, reason } => cmd_revoke(&mandate, &ledger, &reason, output_format),
@@ -343,6 +406,18 @@ fn main() {
         }
         Commands::RevokeDelegation { delegation, ledger, reason } => {
             cmd_revoke_delegation(&delegation, &ledger, &reason, output_format)
+        }
+        Commands::Test { suite, ledger, tag } => {
+            cmd_test(&suite, &ledger, tag.as_deref(), output_format)
+        }
+        Commands::VerifyLineage { receipt, ledger } => {
+            cmd_verify_lineage(&receipt, &ledger, output_format)
+        }
+        Commands::Compress { agent, start, end, ledger, key, issuer_name, out, min_decisions } => {
+            cmd_compress(&agent, &start, &end, &ledger, &key, &issuer_name, &out, min_decisions, output_format)
+        }
+        Commands::VerifySummary { summary } => {
+            cmd_verify_summary(&summary, output_format)
         }
     };
 
@@ -559,8 +634,11 @@ fn cmd_enforce(
     params_json: &str,
     ledger_path: &PathBuf,
     authority_chain: Option<String>,
+    correlation_id: Option<String>,
+    parent_receipt: Option<String>,
     output_format: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
     // Validate params size (max 1MB)
     if params_json.len() > 1_048_576 {
         return Err("params JSON exceeds maximum size of 1MB".into());
@@ -575,6 +653,12 @@ fn cmd_enforce(
     // S2 FIX: Initialize receipt chain from ledger to maintain chain across restarts
     let last_hash = db.last_receipt_hash()?;
     receipt::init_chain_from_ledger(last_hash);
+
+    // Phase 2-4: Initialize authority lineage variables
+    let mut delegation_chain_hash_val = String::new();
+    let mut issuer_did_val = String::new();
+    let mut authority_level_val = String::new();
+    let mut scope_hash_val = String::new();
 
     // AUTHORITY CHAIN VALIDATION (Fix 2)
     if let Some(chain_str) = authority_chain {
@@ -649,6 +733,21 @@ fn cmd_enforce(
             std::process::exit(1);
         }
 
+        // Phase 2: Compute delegation chain hash and authority lineage
+        let chain_hash_input: String = chain.iter()
+            .map(|d| d.delegation_hash.as_str())
+            .collect::<Vec<_>>()
+            .join(":");
+        delegation_chain_hash_val = hex::encode(Sha256::digest(chain_hash_input.as_bytes()));
+
+        // Extract issuer and authority level
+        issuer_did_val = leaf_delegation.grantor_did.clone();
+        authority_level_val = leaf_delegation.level.to_string();
+
+        // Compute effective scope hash
+        let effective_scope_str = format!("{:?}", chain_validation.effective_scope);
+        scope_hash_val = hex::encode(Sha256::digest(effective_scope_str.as_bytes()));
+
         if output_format == "json" {
             let output = serde_json::json!({
                 "authority_chain_verified": true,
@@ -664,7 +763,21 @@ fn cmd_enforce(
     }
 
     // Run enforcement
-    let verdict = enforce::enforce(&mandate_str, tool, &params, &db)?;
+    let mut verdict = enforce::enforce(&mandate_str, tool, &params, &db)?;
+
+    // Phase 2: Set authority lineage on verdict
+    verdict.delegation_chain_hash = delegation_chain_hash_val;
+    verdict.issuer_did = issuer_did_val;
+    verdict.authority_level = authority_level_val;
+    verdict.scope_hash = scope_hash_val;
+
+    // Phase 4: Set correlation
+    if let Some(cid) = correlation_id {
+        verdict.correlation_id = cid;
+    }
+    if let Some(pr) = parent_receipt {
+        verdict.parent_receipt_hash = pr;
+    }
 
     // Generate and append receipt atomically (Fix 7)
     let rcpt = db.enforce_and_record(&verdict)?;
@@ -673,12 +786,21 @@ fn cmd_enforce(
     match verdict.decision {
         enforce::Decision::Allow => {
             if output_format == "json" {
-                let output = serde_json::json!({
+                let mut output = serde_json::json!({
                     "decision": "ALLOW",
                     "tool": tool,
                     "reason": verdict.policy_rule,
                     "receipt_id": rcpt.receipt_id,
                 });
+                if !rcpt.mandate_hash.is_empty() {
+                    output["mandate_hash"] = serde_json::json!(rcpt.mandate_hash);
+                }
+                if !rcpt.proposal_hash.is_empty() {
+                    output["proposal_hash"] = serde_json::json!(rcpt.proposal_hash);
+                }
+                if !rcpt.correlation_id.is_empty() {
+                    output["correlation_id"] = serde_json::json!(rcpt.correlation_id);
+                }
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
                 println!("ALLOW ✓");
@@ -689,12 +811,15 @@ fn cmd_enforce(
         }
         enforce::Decision::Deny => {
             if output_format == "json" {
-                let output = serde_json::json!({
+                let mut output = serde_json::json!({
                     "decision": "DENY",
                     "tool": tool,
                     "reason": verdict.policy_rule,
                     "receipt_id": rcpt.receipt_id,
                 });
+                if !rcpt.correlation_id.is_empty() {
+                    output["correlation_id"] = serde_json::json!(rcpt.correlation_id);
+                }
                 println!("{}", serde_json::to_string_pretty(&output)?);
             } else {
                 println!("DENY ✗");
@@ -1005,6 +1130,14 @@ fn cmd_propose(
         &format!("name={}, justification={}", name, justification),
     )?;
 
+    // Phase 3: Log proposal to proposal history
+    db.log_proposal(
+        &prop.proposal_id, proposer_did, &prop.mandate_hash,
+        &prop.proposal_hash, &prop.status.to_string(),
+        &prop.risk_level.to_string(), prop.required_approvals,
+        &prop.created_at,
+    )?;
+
     if output_format == "json" {
         println!("{}", serde_json::to_string_pretty(&prop)?);
     } else {
@@ -1284,6 +1417,235 @@ fn cmd_revoke_delegation(
         println!("  grantee:  {} ({})", delegation.grantee_name, delegation.grantee_did);
         println!("  hash:     {}…", &delegation.delegation_hash[..16]);
         println!("  reason:   {}", reason);
+    }
+
+    Ok(())
+}
+
+fn cmd_test(
+    suite_path: &PathBuf,
+    ledger_path: &PathBuf,
+    tag: Option<&str>,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tests = test_harness::load_test_suite(suite_path)?;
+    let results = test_harness::run_suite(&tests, tag, ledger_path);
+
+    let passed = results.iter().filter(|r| r.passed).count();
+    let failed = results.iter().filter(|r| !r.passed).count();
+    let total = results.len();
+
+    if output_format == "json" {
+        let output = serde_json::json!({
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "results": results,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("A2G Policy Test Suite");
+        println!("{}", "=".repeat(60));
+        println!();
+
+        for r in &results {
+            let status = if r.passed { "PASS" } else { "FAIL" };
+            let icon = if r.passed { "✓" } else { "✗" };
+            println!("  {} {} {}", icon, status, r.test_id);
+            if !r.passed {
+                println!("      expected: {} ({})", r.expected_decision, r.expected_rule);
+                println!("      actual:   {} ({})", r.actual_decision, r.actual_rule);
+                println!("      reason:   {}", r.reason);
+            }
+        }
+
+        println!();
+        println!("{}", "-".repeat(60));
+        println!("  {} passed, {} failed, {} total", passed, failed, total);
+
+        if failed > 0 {
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_verify_lineage(
+    receipt_id: &str,
+    ledger_path: &PathBuf,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db = ledger::Ledger::open(ledger_path)?;
+    let lineage_result = lineage::reconstruct_lineage(receipt_id, &db, 10);
+
+    match lineage_result {
+        Ok(lin) => {
+            if output_format == "json" {
+                println!("{}", serde_json::to_string_pretty(&lin)?);
+            } else {
+                println!("EXECUTION LINEAGE");
+                println!("{}", "=".repeat(60));
+                println!("  receipt:     {}", lin.receipt_id);
+                println!("  hash:        {}…", &lin.receipt_hash[..16]);
+                println!("  decision:    {}", lin.decision);
+                println!("  tool:        {}", lin.tool);
+                println!("  agent:       {}", lin.agent_did);
+                println!("  timestamp:   {}", lin.timestamp);
+                println!("  rule:        {}", lin.policy_rule);
+                println!();
+                println!("POLICY VERSION");
+                println!("  mandate:     {}", if lin.mandate_hash.is_empty() { "(not captured)" } else { &lin.mandate_hash[..16] });
+                println!("  proposal:    {}", if lin.proposal_hash.is_empty() { "(not captured)" } else { &lin.proposal_hash[..16] });
+                println!();
+                println!("AUTHORITY CONTEXT");
+                let issuer_display = truncate(&lin.issuer_did, 30);
+                println!("  issuer:      {}", if lin.issuer_did.is_empty() { "(not captured)" } else { &issuer_display });
+                println!("  chain:       {}", if lin.delegation_chain_hash.is_empty() { "(not captured)" } else { &lin.delegation_chain_hash[..16] });
+                println!("  level:       {}", if lin.authority_level.is_empty() { "(not captured)" } else { &lin.authority_level });
+                println!("  scope:       {}", if lin.scope_hash.is_empty() { "(not captured)" } else { &lin.scope_hash[..16] });
+                println!();
+                println!("CORRELATION");
+                println!("  correlation: {}", if lin.correlation_id.is_empty() { "(none)" } else { &lin.correlation_id });
+                println!("  parent:      {}", if lin.parent_receipt_hash.is_empty() { "(none)" } else { &lin.parent_receipt_hash[..16] });
+
+                if let Some(ref parent) = lin.parent_lineage {
+                    println!();
+                    println!("PARENT RECEIPT");
+                    println!("  receipt:     {}", parent.receipt_id);
+                    println!("  decision:    {}", parent.decision);
+                    println!("  tool:        {}", parent.tool);
+                }
+
+                println!();
+                if lin.lineage_complete {
+                    println!("LINEAGE COMPLETE ✓");
+                } else {
+                    println!("LINEAGE INCOMPLETE ✗");
+                    println!("  missing: {}", lin.missing_fields.join(", "));
+                }
+            }
+        }
+        Err(e) => {
+            if output_format == "json" {
+                let output = serde_json::json!({
+                    "error": e.to_string(),
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                eprintln!("error: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_compress(
+    agent_did: &str,
+    start: &str,
+    end: &str,
+    ledger_path: &PathBuf,
+    key_path: &PathBuf,
+    issuer_name: &str,
+    out_path: &PathBuf,
+    min_decisions: u64,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db = ledger::Ledger::open(ledger_path)?;
+
+    // Quick count check
+    let count = db.count_window(agent_did, start, end)?;
+    if (count as u64) < min_decisions {
+        return Err(format!(
+            "only {} decisions found (minimum {} required)",
+            count, min_decisions
+        ).into());
+    }
+
+    // Compress the window
+    let data = trust_summary::compress_window(&db, agent_did, start, end)?;
+
+    // Load signing key
+    let key_hex = std::fs::read_to_string(key_path)?.trim().to_string();
+    let key_bytes = hex::decode(&key_hex)?;
+    let key_array: [u8; 32] = key_bytes.try_into()
+        .map_err(|_| "invalid secret key length (expected 32 bytes / 64 hex chars)")?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_array);
+
+    // Derive issuer DID from signing key
+    let issuer_pubkey = signing_key.verifying_key();
+    let issuer_did = format!("did:a2g:{}", bs58::encode(issuer_pubkey.to_bytes()).into_string());
+
+    // Sign the summary
+    let summary = trust_summary::sign_summary(data, &signing_key, &issuer_did, issuer_name)?;
+
+    // Write output
+    let json = serde_json::to_string_pretty(&summary)?;
+    std::fs::write(out_path, &json)?;
+
+    if output_format == "json" {
+        println!("{}", json);
+    } else {
+        println!("TRUST SUMMARY COMPRESSED");
+        println!("{}", "=".repeat(60));
+        println!("  agent:       {}", summary.agent_did);
+        println!("  window:      {} → {}", summary.window_start, summary.window_end);
+        println!("  decisions:   {}", summary.total_decisions);
+        println!("  compliance:  {:.1}%", summary.compliance_rate);
+        println!("  deny rate:   {:.1}%", summary.deny_rate);
+        println!("  escalation:  {:.1}%", summary.escalation_rate);
+        println!("  tools:       {} unique", summary.unique_tools);
+        println!("  mandates:    {} unique", summary.unique_mandates);
+        println!("  merkle root: {}…", &summary.merkle_root[..16]);
+        println!("  chain:       {}", if summary.chain_intact { "INTACT ✓" } else { "BROKEN ✗" });
+        println!("  signed by:   {} ({})", summary.issuer_name, truncate(&summary.issuer_did, 30));
+        println!();
+        println!("  output:      {}", out_path.display());
+    }
+
+    Ok(())
+}
+
+fn cmd_verify_summary(
+    summary_path: &PathBuf,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let json = std::fs::read_to_string(summary_path)?;
+    let summary: trust_summary::TrustSummary = serde_json::from_str(&json)?;
+
+    let valid = trust_summary::verify_summary(&summary)?;
+
+    if output_format == "json" {
+        let output = serde_json::json!({
+            "valid": valid,
+            "summary_id": summary.summary_id,
+            "agent_did": summary.agent_did,
+            "window_start": summary.window_start,
+            "window_end": summary.window_end,
+            "total_decisions": summary.total_decisions,
+            "compliance_rate": summary.compliance_rate,
+            "merkle_root": summary.merkle_root,
+            "chain_intact": summary.chain_intact,
+            "issuer_did": summary.issuer_did,
+            "issuer_name": summary.issuer_name,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("TRUST SUMMARY VERIFICATION");
+        println!("{}", "=".repeat(60));
+        println!("  agent:       {}", summary.agent_did);
+        println!("  window:      {} → {}", summary.window_start, summary.window_end);
+        println!("  decisions:   {}", summary.total_decisions);
+        println!("  compliance:  {:.1}%", summary.compliance_rate);
+        println!("  merkle root: {}…", &summary.merkle_root[..16]);
+        println!("  chain:       {}", if summary.chain_intact { "INTACT ✓" } else { "BROKEN ✗" });
+        println!("  signature:   {}", if valid { "VALID ✓" } else { "INVALID ✗" });
+    }
+
+    if !valid {
+        std::process::exit(1);
     }
 
     Ok(())

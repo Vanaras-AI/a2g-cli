@@ -23,6 +23,22 @@ pub struct Receipt {
     pub timestamp: String,
     pub prev_hash: String,
     pub receipt_hash: String,
+    #[serde(default)]
+    pub mandate_hash: String,
+    #[serde(default)]
+    pub proposal_hash: String,
+    #[serde(default)]
+    pub delegation_chain_hash: String,
+    #[serde(default)]
+    pub issuer_did: String,
+    #[serde(default)]
+    pub authority_level: String,
+    #[serde(default)]
+    pub scope_hash: String,
+    #[serde(default)]
+    pub correlation_id: String,
+    #[serde(default)]
+    pub parent_receipt_hash: String,
 }
 
 /// Thread-safe storage for the previous receipt hash (chain linking)
@@ -51,7 +67,7 @@ pub fn generate_receipt(verdict: &Verdict) -> Receipt {
     let policy_hash = hex::encode(Sha256::digest(verdict.policy_rule.as_bytes()));
 
     // Compute receipt hash (covers all fields)
-    let hash_input = format!(
+    let mut hash_input = format!(
         "{}:{}:{}:{}:{}:{}:{}:{}:{}",
         receipt_id,
         verdict.verdict_id,
@@ -63,6 +79,18 @@ pub fn generate_receipt(verdict: &Verdict) -> Receipt {
         timestamp,
         prev_hash,
     );
+
+    // Lineage extension (only affects hash when populated)
+    if !verdict.mandate_hash.is_empty() {
+        hash_input.push_str(&format!(":{}:{}", verdict.mandate_hash, verdict.proposal_hash));
+    }
+    if !verdict.delegation_chain_hash.is_empty() {
+        hash_input.push_str(&format!(":{}:{}:{}:{}", verdict.delegation_chain_hash, verdict.issuer_did, verdict.authority_level, verdict.scope_hash));
+    }
+    if !verdict.correlation_id.is_empty() {
+        hash_input.push_str(&format!(":{}:{}", verdict.correlation_id, verdict.parent_receipt_hash));
+    }
+
     let receipt_hash = hex::encode(Sha256::digest(hash_input.as_bytes()));
 
     // Update chain
@@ -80,12 +108,20 @@ pub fn generate_receipt(verdict: &Verdict) -> Receipt {
         timestamp,
         prev_hash,
         receipt_hash,
+        mandate_hash: verdict.mandate_hash.clone(),
+        proposal_hash: verdict.proposal_hash.clone(),
+        delegation_chain_hash: verdict.delegation_chain_hash.clone(),
+        issuer_did: verdict.issuer_did.clone(),
+        authority_level: verdict.authority_level.clone(),
+        scope_hash: verdict.scope_hash.clone(),
+        correlation_id: verdict.correlation_id.clone(),
+        parent_receipt_hash: verdict.parent_receipt_hash.clone(),
     }
 }
 
 /// Verify a receipt's integrity (check that the hash is valid)
 pub fn verify_receipt(receipt: &Receipt) -> bool {
-    let hash_input = format!(
+    let mut hash_input = format!(
         "{}:{}:{}:{}:{}:{}:{}:{}:{}",
         receipt.receipt_id,
         receipt.verdict_id,
@@ -97,6 +133,18 @@ pub fn verify_receipt(receipt: &Receipt) -> bool {
         receipt.timestamp,
         receipt.prev_hash,
     );
+
+    // Lineage extension (only affects hash when populated)
+    if !receipt.mandate_hash.is_empty() {
+        hash_input.push_str(&format!(":{}:{}", receipt.mandate_hash, receipt.proposal_hash));
+    }
+    if !receipt.delegation_chain_hash.is_empty() {
+        hash_input.push_str(&format!(":{}:{}:{}:{}", receipt.delegation_chain_hash, receipt.issuer_did, receipt.authority_level, receipt.scope_hash));
+    }
+    if !receipt.correlation_id.is_empty() {
+        hash_input.push_str(&format!(":{}:{}", receipt.correlation_id, receipt.parent_receipt_hash));
+    }
+
     let computed = hex::encode(Sha256::digest(hash_input.as_bytes()));
     computed == receipt.receipt_hash
 }
@@ -148,6 +196,14 @@ mod tests {
             decision,
             policy_rule: "test_rule".to_string(),
             evaluated_at: Utc::now(),
+            mandate_hash: String::new(),
+            proposal_hash: String::new(),
+            delegation_chain_hash: String::new(),
+            issuer_did: String::new(),
+            authority_level: String::new(),
+            scope_hash: String::new(),
+            correlation_id: String::new(),
+            parent_receipt_hash: String::new(),
         }
     }
 
@@ -169,6 +225,14 @@ mod tests {
             decision: Decision::Allow,
             policy_rule: "test".to_string(),
             evaluated_at: Utc::now(),
+            mandate_hash: String::new(),
+            proposal_hash: String::new(),
+            delegation_chain_hash: String::new(),
+            issuer_did: String::new(),
+            authority_level: String::new(),
+            scope_hash: String::new(),
+            correlation_id: String::new(),
+            parent_receipt_hash: String::new(),
         };
         init_chain_from_ledger(None);
         let mut rcpt = generate_receipt(&verdict);
