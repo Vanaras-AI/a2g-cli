@@ -13,6 +13,14 @@ Architecture:
                          DENY  → return error
                          ESCALATE → return escalation notice
 
+Features:
+    - Governed tool proxying (any MCP tool, any MCP client)
+    - Built-in governance tools: status, audit, authority_log
+    - Lineage tools: verify_lineage (reconstruct provenance from receipt)
+    - Trust compression tools: compress, verify_summary
+    - Cross-vendor correlation on all governed tool calls
+    - Immutable audit trail with full lineage metadata
+
 This is the most powerful integration pattern because it works with
 ANY MCP-compatible agent without modifying the agent's code.
 
@@ -97,21 +105,25 @@ class A2GMCPServer:
     1. Wrap existing tool functions with governance
     2. Proxy to an upstream MCP server with governance
     3. Expose governance-specific tools (audit, status, revoke)
+    4. Expose lineage tools (verify_lineage, compress, verify_summary)
     """
 
     def __init__(
         self,
         a2g_client: A2GClient,
         server_name: str = "a2g-governed",
-        server_version: str = "0.1.0",
+        server_version: str = "0.2.0",
+        correlation_id: Optional[str] = None,
     ):
         self.client = a2g_client
         self.server_name = server_name
         self.server_version = server_version
+        self.correlation_id = correlation_id
         self.tools: dict[str, tuple[MCPToolDefinition, Any]] = {}
 
         # Register built-in governance tools
         self._register_governance_tools()
+        self._register_lineage_tools()
 
     def _register_governance_tools(self):
         """Register A2G governance tools exposed via MCP."""
@@ -159,6 +171,65 @@ class A2GMCPServer:
             handler=self._handle_authority_log,
         )
 
+    def _register_lineage_tools(self):
+        """Register lineage and trust compression tools exposed via MCP."""
+
+        # a2g_verify_lineage — reconstruct execution lineage from a receipt
+        self.register_tool(
+            MCPToolDefinition(
+                name="a2g_verify_lineage",
+                description="Reconstruct full execution lineage from a receipt ID. Returns mandate version, proposal, delegation chain, authority, and correlation.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "receipt_id": {"type": "string", "description": "Receipt ID or receipt hash to trace"},
+                    },
+                    "required": ["receipt_id"],
+                },
+                a2g_tool_name="__internal__",
+            ),
+            handler=self._handle_verify_lineage,
+        )
+
+        # a2g_compress — compress governance history into a signed trust summary
+        self.register_tool(
+            MCPToolDefinition(
+                name="a2g_compress",
+                description="Compress an agent's governance history into a signed, portable trust proof. Requires agent DID, time window, and signing authority.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "agent_did": {"type": "string", "description": "Agent DID to compress"},
+                        "start": {"type": "string", "description": "Window start (ISO 8601)"},
+                        "end": {"type": "string", "description": "Window end (ISO 8601)"},
+                        "key_path": {"type": "string", "description": "Path to ed25519 signing key"},
+                        "issuer_name": {"type": "string", "description": "Human-readable signer name"},
+                        "out_path": {"type": "string", "description": "Output path for summary JSON"},
+                    },
+                    "required": ["agent_did", "start", "end", "key_path", "issuer_name", "out_path"],
+                },
+                a2g_tool_name="__internal__",
+            ),
+            handler=self._handle_compress,
+        )
+
+        # a2g_verify_summary — verify a trust summary's integrity
+        self.register_tool(
+            MCPToolDefinition(
+                name="a2g_verify_summary",
+                description="Verify a trust summary's cryptographic integrity and signature. Returns validation status.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "summary_path": {"type": "string", "description": "Path to trust summary JSON file"},
+                    },
+                    "required": ["summary_path"],
+                },
+                a2g_tool_name="__internal__",
+            ),
+            handler=self._handle_verify_summary,
+        )
+
     def register_tool(
         self,
         definition: MCPToolDefinition,
@@ -191,17 +262,27 @@ class A2GMCPServer:
         self.tools[name] = (defn, self._wrap_with_governance(handler, defn))
 
     def _wrap_with_governance(self, handler: Any, definition: MCPToolDefinition) -> Any:
-        """Wrap a handler with A2G enforcement."""
+        """Wrap a handler with A2G enforcement including lineage support."""
         async def governed_handler(params: dict) -> MCPToolResult:
+            # Extract lineage params
+            corr_id = params.pop("_correlation_id", self.correlation_id)
+            parent = params.pop("_parent_receipt", None)
+
             # A2G Enforcement
             verdict = self.client.enforce(
                 tool=definition.a2g_tool_name,
                 params={k: str(v) for k, v in params.items()},
+                correlation_id=corr_id,
+                parent_receipt=parent,
             )
 
             logger.info(
-                "A2G [MCP]: tool=%s decision=%s receipt=%s",
-                definition.a2g_tool_name, verdict.decision.value, verdict.receipt_id,
+                "A2G [MCP]: tool=%s decision=%s receipt=%s mandate=%s correlation=%s",
+                definition.a2g_tool_name,
+                verdict.decision.value,
+                verdict.receipt_id,
+                verdict.mandate_hash[:16] + "…" if verdict.mandate_hash else "",
+                verdict.correlation_id or "none",
             )
 
             if verdict.allowed:
@@ -250,6 +331,68 @@ class A2GMCPServer:
         last = params.get("last", 10)
         result = self.client.authority_log(last=last)
         return MCPToolResult.text(result)
+
+    # ── Lineage + Trust Compression Handlers ──────────────────────────
+
+    async def _handle_verify_lineage(self, params: dict) -> MCPToolResult:
+        receipt_id = params.get("receipt_id", "")
+        if not receipt_id:
+            return MCPToolResult.text("Error: receipt_id is required", is_error=True)
+        try:
+            lineage = self.client.verify_lineage(receipt_id)
+            return MCPToolResult.text(json.dumps(lineage.raw, indent=2))
+        except A2GError as e:
+            return MCPToolResult.text(f"Lineage error: {e}", is_error=True)
+
+    async def _handle_compress(self, params: dict) -> MCPToolResult:
+        required = ["agent_did", "start", "end", "key_path", "issuer_name", "out_path"]
+        missing = [k for k in required if not params.get(k)]
+        if missing:
+            return MCPToolResult.text(
+                f"Error: missing required params: {', '.join(missing)}", is_error=True,
+            )
+        try:
+            summary = self.client.compress(
+                agent_did=params["agent_did"],
+                start=params["start"],
+                end=params["end"],
+                key_path=params["key_path"],
+                issuer_name=params["issuer_name"],
+                out_path=params["out_path"],
+            )
+            return MCPToolResult.text(json.dumps({
+                "summary_id": summary.summary_id,
+                "agent_did": summary.agent_did,
+                "total_decisions": summary.total_decisions,
+                "compliance_rate": summary.compliance_rate,
+                "deny_rate": summary.deny_rate,
+                "escalation_rate": summary.escalation_rate,
+                "merkle_root": summary.merkle_root,
+                "chain_intact": summary.chain_intact,
+                "out_path": params["out_path"],
+            }, indent=2))
+        except A2GError as e:
+            return MCPToolResult.text(f"Compression error: {e}", is_error=True)
+
+    async def _handle_verify_summary(self, params: dict) -> MCPToolResult:
+        summary_path = params.get("summary_path", "")
+        if not summary_path:
+            return MCPToolResult.text("Error: summary_path is required", is_error=True)
+        try:
+            summary = self.client.verify_summary(summary_path)
+            return MCPToolResult.text(json.dumps({
+                "valid": summary.valid,
+                "summary_id": summary.summary_id,
+                "agent_did": summary.agent_did,
+                "total_decisions": summary.total_decisions,
+                "compliance_rate": summary.compliance_rate,
+                "merkle_root": summary.merkle_root,
+                "chain_intact": summary.chain_intact,
+                "issuer_did": summary.issuer_did,
+                "issuer_name": summary.issuer_name,
+            }, indent=2))
+        except A2GError as e:
+            return MCPToolResult.text(f"Verification error: {e}", is_error=True)
 
     # ── MCP Protocol Handlers ─────────────────────────────────────────
 
@@ -382,6 +525,7 @@ class A2GMCPServer:
 def create_filesystem_server(
     a2g_client: A2GClient,
     base_dir: str = ".",
+    correlation_id: Optional[str] = None,
 ) -> A2GMCPServer:
     """
     Create a governed filesystem MCP server.
@@ -389,10 +533,17 @@ def create_filesystem_server(
     Provides read_file, write_file, and list_dir tools,
     all governed by A2G mandate boundaries.
 
+    Also includes built-in governance tools:
+    - a2g_status, a2g_audit, a2g_authority_log
+    - a2g_verify_lineage, a2g_compress, a2g_verify_summary
+
     This is a drop-in replacement for the standard filesystem MCP server,
     with deterministic governance enforcement on every operation.
     """
-    server = A2GMCPServer(a2g_client, server_name="a2g-filesystem")
+    server = A2GMCPServer(
+        a2g_client, server_name="a2g-filesystem",
+        correlation_id=correlation_id,
+    )
     base = Path(base_dir).resolve()
 
     def read_file(params: dict) -> str:
@@ -443,6 +594,7 @@ if __name__ == "__main__":
     parser.add_argument("--mandate", required=True, help="Path to mandate TOML")
     parser.add_argument("--ledger", default="a2g_ledger.db", help="Ledger DB path")
     parser.add_argument("--base-dir", default=".", help="Base directory for file ops")
+    parser.add_argument("--correlation-id", default=None, help="Cross-vendor correlation UUID")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -452,11 +604,16 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO)
 
     client = A2GClient(mandate_path=args.mandate, ledger_path=args.ledger)
-    server = create_filesystem_server(client, base_dir=args.base_dir)
+    server = create_filesystem_server(
+        client, base_dir=args.base_dir,
+        correlation_id=args.correlation_id,
+    )
 
     print("A2G MCP Server — governed filesystem", file=sys.stderr)
-    print(f"  mandate: {args.mandate}", file=sys.stderr)
-    print(f"  ledger:  {args.ledger}", file=sys.stderr)
-    print(f"  base:    {args.base_dir}", file=sys.stderr)
+    print(f"  mandate:     {args.mandate}", file=sys.stderr)
+    print(f"  ledger:      {args.ledger}", file=sys.stderr)
+    print(f"  base:        {args.base_dir}", file=sys.stderr)
+    print(f"  correlation: {args.correlation_id or 'none'}", file=sys.stderr)
+    print(f"  tools:       {len(server.tools)} ({', '.join(server.tools.keys())})", file=sys.stderr)
 
     asyncio.run(server.run_stdio())

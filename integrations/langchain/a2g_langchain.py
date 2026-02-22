@@ -11,6 +11,13 @@ Architecture:
                                     DENY  → skip + log
                                     ESCALATE → pause + notify
 
+Features:
+    - Per-tool governance enforcement (ALLOW / DENY / ESCALATE)
+    - Cross-vendor correlation (link decisions across agent frameworks)
+    - Execution lineage (parent_receipt chaining for causal graphs)
+    - Trust compression (portable governance proofs via A2GClient.compress)
+    - Immutable audit trail with lineage metadata
+
 Usage:
     from a2g_langchain import A2GGovernedTool, A2GToolkit, A2GCallbackHandler
 
@@ -53,6 +60,11 @@ class A2GGovernedTool:
     2. If ALLOW → execute the underlying tool
     3. If DENY → return denial message (no execution)
     4. If ESCALATE → raise for human review
+
+    Lineage support:
+    - Pass correlation_id to link decisions across vendors
+    - Pass parent_receipt to chain causal execution graphs
+    - Verdict includes mandate_hash, proposal_hash for full provenance
     """
 
     def __init__(
@@ -60,22 +72,50 @@ class A2GGovernedTool:
         tool: Any,  # langchain_core.tools.BaseTool
         a2g_client: A2GClient,
         a2g_tool_name: Optional[str] = None,
+        correlation_id: Optional[str] = None,
         on_deny: Optional[Callable] = None,
         on_escalate: Optional[Callable] = None,
     ):
         self.tool = tool
         self.client = a2g_client
         self.a2g_tool_name = a2g_tool_name or tool.name
+        self.correlation_id = correlation_id
         self.on_deny = on_deny
         self.on_escalate = on_escalate
+        self._last_verdict: Optional[A2GVerdict] = None
 
         # Preserve LangChain tool interface
         self.name = tool.name
         self.description = tool.description
         self.args_schema = getattr(tool, "args_schema", None)
 
-    def invoke(self, input: Any, config: Optional[dict] = None, **kwargs) -> Any:
-        """LangChain-compatible invoke with A2G enforcement."""
+    @property
+    def last_receipt_id(self) -> Optional[str]:
+        """Get the receipt ID from the last enforcement decision."""
+        return self._last_verdict.receipt_id if self._last_verdict else None
+
+    @property
+    def last_verdict(self) -> Optional[A2GVerdict]:
+        """Get the full verdict from the last enforcement decision."""
+        return self._last_verdict
+
+    def invoke(
+        self,
+        input: Any,
+        config: Optional[dict] = None,
+        correlation_id: Optional[str] = None,
+        parent_receipt: Optional[str] = None,
+        **kwargs,
+    ) -> Any:
+        """
+        LangChain-compatible invoke with A2G enforcement.
+
+        Args:
+            input: Tool input (dict or str)
+            config: LangChain config
+            correlation_id: Override correlation ID for this call
+            parent_receipt: Receipt hash from a preceding governed decision
+        """
         # Extract params for A2G
         if isinstance(input, dict):
             params = input
@@ -84,16 +124,25 @@ class A2GGovernedTool:
         else:
             params = {"input": str(input)}
 
+        corr_id = correlation_id or self.correlation_id
+
         # Enforce governance
         try:
             verdict = self.client.enforce(
                 tool=self.a2g_tool_name,
                 params={k: str(v) for k, v in params.items()},
+                correlation_id=corr_id,
+                parent_receipt=parent_receipt,
             )
+            self._last_verdict = verdict
 
             logger.info(
-                "A2G enforcement: tool=%s decision=%s receipt=%s",
-                self.a2g_tool_name, verdict.decision.value, verdict.receipt_id,
+                "A2G enforcement: tool=%s decision=%s receipt=%s mandate_hash=%s correlation=%s",
+                self.a2g_tool_name,
+                verdict.decision.value,
+                verdict.receipt_id,
+                verdict.mandate_hash[:16] + "…" if verdict.mandate_hash else "",
+                verdict.correlation_id or "none",
             )
 
             if verdict.allowed:
@@ -130,11 +179,14 @@ class A2GToolkit:
     """
     Wraps an entire set of LangChain tools with A2G governance.
 
+    All tools share the same correlation_id for cross-vendor tracing.
+
     Usage:
         toolkit = A2GToolkit(
             tools=[search_tool, file_tool, api_tool],
             a2g_client=client,
             tool_name_map={"search": "http_get", "file": "read_file"},
+            correlation_id="uuid-for-this-session",
         )
         agent = create_react_agent(llm, toolkit.governed_tools)
     """
@@ -144,15 +196,18 @@ class A2GToolkit:
         tools: list,
         a2g_client: A2GClient,
         tool_name_map: Optional[dict[str, str]] = None,
+        correlation_id: Optional[str] = None,
     ):
         self.client = a2g_client
         self.tool_name_map = tool_name_map or {}
+        self.correlation_id = correlation_id
 
         self.governed_tools = [
             A2GGovernedTool(
                 tool=t,
                 a2g_client=a2g_client,
                 a2g_tool_name=self.tool_name_map.get(t.name, t.name),
+                correlation_id=correlation_id,
             )
             for t in tools
         ]
@@ -208,14 +263,22 @@ class A2GEnforcementCallback:
     Unlike A2GAuditCallback (audit-only), this handler actively blocks
     unauthorized tool calls by raising an exception in on_tool_start.
 
+    Supports correlation_id for cross-vendor lineage tracking.
+
     Usage:
-        handler = A2GEnforcementCallback(a2g_client)
+        handler = A2GEnforcementCallback(a2g_client, correlation_id="session-uuid")
         agent.invoke({"input": "..."}, config={"callbacks": [handler]})
     """
 
-    def __init__(self, a2g_client: A2GClient, tool_name_map: Optional[dict[str, str]] = None):
+    def __init__(
+        self,
+        a2g_client: A2GClient,
+        tool_name_map: Optional[dict[str, str]] = None,
+        correlation_id: Optional[str] = None,
+    ):
         self.client = a2g_client
         self.tool_name_map = tool_name_map or {}
+        self.correlation_id = correlation_id
 
     def on_tool_start(self, serialized: dict, input_str: str, **kwargs):
         """Enforce governance BEFORE tool execution."""
@@ -225,11 +288,18 @@ class A2GEnforcementCallback:
         params = {"input": input_str} if isinstance(input_str, str) else {}
 
         try:
-            verdict = self.client.enforce(tool=a2g_name, params=params)
+            verdict = self.client.enforce(
+                tool=a2g_name,
+                params=params,
+                correlation_id=self.correlation_id,
+            )
 
             logger.info(
-                "A2G enforcement: tool=%s decision=%s receipt=%s",
-                a2g_name, verdict.decision.value, verdict.receipt_id,
+                "A2G enforcement: tool=%s decision=%s receipt=%s correlation=%s",
+                a2g_name,
+                verdict.decision.value,
+                verdict.receipt_id,
+                verdict.correlation_id or "none",
             )
 
             if verdict.denied:
@@ -267,6 +337,7 @@ def create_governed_agent(
     tools: list,
     a2g_client: A2GClient,
     tool_name_map: Optional[dict[str, str]] = None,
+    correlation_id: Optional[str] = None,
     agent_type: str = "react",
 ) -> Any:
     """
@@ -280,6 +351,7 @@ def create_governed_agent(
         tools: List of LangChain tools
         a2g_client: Configured A2GClient instance
         tool_name_map: Optional mapping of LangChain tool names to A2G tool names
+        correlation_id: UUID for cross-vendor correlation (links all decisions in this session)
         agent_type: "react" or "structured_chat"
 
     Returns:
@@ -290,7 +362,7 @@ def create_governed_agent(
         llm = ChatAnthropic(model="claude-sonnet-4-5-20250929")
         tools = [SearchTool(), FileReadTool()]
 
-        agent = create_governed_agent(llm, tools, client)
+        agent = create_governed_agent(llm, tools, client, correlation_id="session-123")
         result = agent.invoke({"input": "Find Q4 revenue data"})
     """
     try:
@@ -301,8 +373,8 @@ def create_governed_agent(
             "langchain is required: pip install langchain langchain-core"
         )
 
-    toolkit = A2GToolkit(tools, a2g_client, tool_name_map)
-    handler = A2GEnforcementCallback(a2g_client, tool_name_map)
+    toolkit = A2GToolkit(tools, a2g_client, tool_name_map, correlation_id)
+    handler = A2GEnforcementCallback(a2g_client, tool_name_map, correlation_id)
 
     if agent_type == "react":
         prompt = hub.pull("hwchase17/react")
@@ -341,7 +413,7 @@ if __name__ == "__main__":
         ledger_path="gov.db",
     )
 
-    # 2. Create governed agent
+    # 2. Create governed agent with cross-vendor correlation
     llm = ChatAnthropic(model="claude-sonnet-4-5-20250929")
     tools = [ReadFileTool(), ShellTool()]
 
@@ -350,12 +422,26 @@ if __name__ == "__main__":
         tools=tools,
         a2g_client=client,
         tool_name_map={"read_file": "read_file", "terminal": "execute"},
+        correlation_id="session-abc-123",  # links all decisions
     )
 
-    # 3. Every tool call is now governed by A2G
+    # 3. Every tool call is now governed by A2G with full lineage
     result = agent.invoke({"input": "Read the Q4 report from workspace/reports/"})
     # → A2G enforces: read_file + path boundary check → ALLOW ✓
+    # → Receipt includes mandate_hash, proposal_hash, correlation_id
 
-    result = agent.invoke({"input": "Delete all files in /etc"})
-    # → A2G enforces: execute + boundary check → DENY ✗
+    # 4. Verify lineage of any decision
+    lineage = client.verify_lineage("receipt-uuid-here")
+    print(lineage.mandate_hash, lineage.lineage_complete)
+
+    # 5. Compress governance history into a trust proof
+    summary = client.compress(
+        agent_did="did:a2g:my-agent",
+        start="2026-01-01T00:00:00Z",
+        end="2026-03-31T23:59:59Z",
+        key_path="sovereign.secret.key",
+        issuer_name="Trust Authority",
+        out_path="q1-summary.json",
+    )
+    print(f"Compliance: {summary.compliance_rate}%, Merkle: {summary.merkle_root}")
     """)

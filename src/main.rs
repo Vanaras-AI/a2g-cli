@@ -19,6 +19,7 @@ mod proposal;
 mod test_harness;
 mod lineage;
 mod trust_summary;
+mod visual_receipt;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -105,12 +106,9 @@ enum Commands {
         /// TTL in hours (default: 24)
         #[arg(long, default_value = "24")]
         ttl: u64,
-        /// Optional path to approved proposal JSON (for governance enforcement)
+        /// Path to approved proposal JSON (REQUIRED — governance enforcement)
         #[arg(long)]
-        proposal: Option<PathBuf>,
-        /// Skip proposal verification (governance exception)
-        #[arg(long, default_value = "false")]
-        skip_proposal: bool,
+        proposal: PathBuf,
     },
     /// Verify a mandate (signature + TTL + identity)
     Verify {
@@ -370,6 +368,21 @@ enum Commands {
         #[arg(long)]
         summary: PathBuf,
     },
+    /// Generate a visual governance receipt (terminal or HTML)
+    VisualReceipt {
+        /// Receipt ID or receipt hash
+        #[arg(long)]
+        receipt: String,
+        /// Path to ledger database
+        #[arg(long, default_value = "a2g_ledger.db")]
+        ledger: PathBuf,
+        /// Output format: terminal, html, or json
+        #[arg(long, default_value = "terminal")]
+        format: String,
+        /// Output file for HTML format (optional)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -379,7 +392,7 @@ fn main() {
     let result = match cli.command {
         Commands::Init { name, out } => cmd_init(&name, &out, output_format),
         Commands::Sovereign { out } => cmd_sovereign(&out, output_format),
-        Commands::Sign { mandate, key, ttl, proposal, skip_proposal } => cmd_sign(&mandate, &key, ttl, proposal, skip_proposal, output_format),
+        Commands::Sign { mandate, key, ttl, proposal } => cmd_sign(&mandate, &key, ttl, &proposal, output_format),
         Commands::Verify { mandate } => cmd_verify(&mandate, output_format),
         Commands::Enforce { mandate, tool, params, ledger, authority_chain, correlation_id, parent_receipt } => {
             cmd_enforce(&mandate, &tool, &params, &ledger, authority_chain, correlation_id, parent_receipt, output_format)
@@ -418,6 +431,9 @@ fn main() {
         }
         Commands::VerifySummary { summary } => {
             cmd_verify_summary(&summary, output_format)
+        }
+        Commands::VisualReceipt { receipt, ledger, format, out } => {
+            cmd_visual_receipt(&receipt, &ledger, &format, out.as_ref())
         }
     };
 
@@ -514,11 +530,11 @@ fn cmd_sign(
     mandate_path: &PathBuf,
     key_path: &PathBuf,
     ttl_hours: u64,
-    proposal_path: Option<PathBuf>,
-    skip_proposal: bool,
+    proposal_path: &PathBuf,
     output_format: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use sha2::{Digest, Sha256};
+    use chrono::DateTime;
 
     // Validate TTL
     validate_ttl(ttl_hours)?;
@@ -526,43 +542,44 @@ fn cmd_sign(
     let mandate_str = std::fs::read_to_string(mandate_path)?;
     let key_hex = std::fs::read_to_string(key_path)?.trim().to_string();
 
-    // Handle proposal verification if provided
-    if let Some(prop_path) = proposal_path {
-        // Load and verify the proposal
-        let prop_json = std::fs::read_to_string(&prop_path)?;
-        let prop: proposal::Proposal = serde_json::from_str(&prop_json)?;
+    // MANDATORY: Load and verify the approved proposal
+    let prop_json = std::fs::read_to_string(proposal_path)?;
+    let prop: proposal::Proposal = serde_json::from_str(&prop_json)?;
 
-        // Check proposal status is "Approved"
-        if prop.status != proposal::ProposalStatus::Approved {
+    // Check proposal status is "Approved"
+    if prop.status != proposal::ProposalStatus::Approved {
+        return Err(format!(
+            "proposal is not approved (status: {})",
+            prop.status
+        )
+        .into());
+    }
+
+    // C1 FIX: Check proposal has not expired
+    if let Ok(expires) = DateTime::parse_from_rfc3339(&prop.expires_at) {
+        if chrono::Utc::now() >= expires {
             return Err(format!(
-                "proposal is not approved (status: {})",
-                prop.status
-            )
-            .into());
+                "proposal has expired (expired at {})",
+                prop.expires_at
+            ).into());
         }
+    }
 
-        // Compute SHA-256 of mandate body
-        let mandate_body_hash = hex::encode(Sha256::digest(mandate_str.as_bytes()));
+    // Compute SHA-256 of mandate body
+    let mandate_body_hash = hex::encode(Sha256::digest(mandate_str.as_bytes()));
 
-        // Compare to proposal.mandate_hash
-        if mandate_body_hash != prop.mandate_hash {
-            return Err(
-                "mandate modified after proposal approval: hash mismatch (governance violation)"
-                    .into(),
-            );
-        }
+    // Compare to proposal.mandate_hash — prevents mandate modification after approval
+    if mandate_body_hash != prop.mandate_hash {
+        return Err(
+            "mandate modified after proposal approval: hash mismatch (governance violation)"
+                .into(),
+        );
+    }
 
-        if output_format != "json" {
-            println!("proposal verified ✓");
-            println!("  proposal:    {}", &prop.proposal_hash[..16]);
-            println!("  status:      {}", prop.status);
-        }
-    } else if skip_proposal {
-        if output_format != "json" {
-            eprintln!("WARNING: signing without approved proposal (governance exception)");
-        }
-    } else if output_format != "json" {
-        println!("NOTE: signing without proposal verification (backwards compatible mode)");
+    if output_format != "json" {
+        println!("proposal verified ✓");
+        println!("  proposal:    {}", &prop.proposal_hash[..16]);
+        println!("  status:      {}", prop.status);
     }
 
     let signed = mandate::sign_mandate(&mandate_str, &key_hex, ttl_hours)?;
@@ -1646,6 +1663,48 @@ fn cmd_verify_summary(
 
     if !valid {
         std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn cmd_visual_receipt(
+    receipt_id: &str,
+    ledger_path: &PathBuf,
+    format: &str,
+    out_path: Option<&PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db = ledger::Ledger::open(ledger_path)?;
+
+    // Lookup the receipt in the ledger
+    let entry = db.query_decision_by_id(receipt_id)?
+        .ok_or_else(|| format!("receipt '{}' not found in ledger", receipt_id))?;
+
+    // Try to reconstruct lineage (non-fatal if it fails)
+    let lineage = lineage::reconstruct_lineage(receipt_id, &db, 5).ok();
+
+    // Verify chain integrity around this receipt
+    let (chain_ok, _) = db.verify_chain()?;
+
+    match format {
+        "html" => {
+            let html = visual_receipt::render_html(&entry, lineage.as_ref(), chain_ok);
+            if let Some(path) = out_path {
+                std::fs::write(path, &html)?;
+                println!("visual receipt → {}", path.display());
+            } else {
+                println!("{}", html);
+            }
+        }
+        "json" => {
+            let json = visual_receipt::render_json(&entry, lineage.as_ref(), chain_ok)?;
+            println!("{}", json);
+        }
+        _ => {
+            // Terminal output
+            let output = visual_receipt::render_terminal(&entry, lineage.as_ref(), chain_ok);
+            println!("{}", output);
+        }
     }
 
     Ok(())

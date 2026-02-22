@@ -94,10 +94,12 @@ pub fn compress_window(
     let mut last_receipt_hash = String::new();
     let mut chain_intact = true;
 
-    // Check chain integrity: for consecutive entries in window,
-    // each entry's prev_hash should match the previous entry's receipt_hash.
-    // We only validate within our window (not against pre-window entries).
-    let mut prev_hash_in_window: Option<String> = None;
+    // C3 FIX: Validate chain integrity by checking BOTH sequential ordering
+    // AND prev_hash links between consecutive entries within the window.
+    // This prevents reordering, duplication, or deletion attacks that would
+    // produce the same Merkle root but violate chain integrity.
+    let mut prev_receipt_hash_in_window: Option<String> = None;
+    let mut prev_seq = 0i64;
 
     for entry in &entries {
         // Accumulate counts
@@ -118,14 +120,19 @@ pub fn compress_window(
         receipt_hashes.push(entry.receipt_hash.clone());
         last_receipt_hash = entry.receipt_hash.clone();
 
-        // Chain integrity check within window
-        if let Some(ref prev) = prev_hash_in_window {
-            // We can't check prev_hash of entries since LedgerEntry doesn't have it
-            // But we can verify sequential ordering by seq number
-            // The real chain check is done via the Merkle root
-            let _ = prev; // acknowledge
+        // C3 FIX: Validate prev_hash chain links within window
+        if let Some(ref expected_prev) = prev_receipt_hash_in_window {
+            if entry.prev_hash != *expected_prev {
+                chain_intact = false;
+            }
         }
-        prev_hash_in_window = Some(entry.receipt_hash.clone());
+        prev_receipt_hash_in_window = Some(entry.receipt_hash.clone());
+
+        // Also verify sequential ordering
+        if entry.seq <= prev_seq && prev_seq != 0 {
+            chain_intact = false;
+        }
+        prev_seq = entry.seq;
     }
 
     let allow_count = decision_counts.get("ALLOW").copied().unwrap_or(0);
@@ -135,17 +142,6 @@ pub fn compress_window(
     let compliance_rate = if total > 0 { (allow_count as f64 / total as f64) * 100.0 } else { 0.0 };
     let deny_rate = if total > 0 { (deny_count as f64 / total as f64) * 100.0 } else { 0.0 };
     let escalation_rate = if total > 0 { (escalate_count as f64 / total as f64) * 100.0 } else { 0.0 };
-
-    // Verify chain integrity via ledger's built-in method if possible
-    // For window-only validation, we check that entries are sequentially ordered
-    let mut prev_seq = 0i64;
-    for entry in &entries {
-        if entry.seq <= prev_seq && prev_seq != 0 {
-            chain_intact = false;
-            break;
-        }
-        prev_seq = entry.seq;
-    }
 
     let root = merkle_root(&receipt_hashes);
 

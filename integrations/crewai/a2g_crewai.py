@@ -12,6 +12,13 @@ Architecture:
                               DENY  → skip + log
                               ESCALATE → pause crew + notify
 
+Features:
+    - Per-agent mandate governance (different permissions per role)
+    - Cross-vendor correlation (link crew decisions to external systems)
+    - Execution lineage (parent_receipt chaining across crew tasks)
+    - Trust compression (governance proofs per agent via A2GClient.compress)
+    - Pre-execution task validation against mandates
+
 Usage:
     from a2g_crewai import A2GGovernedAgent, govern_crew
 
@@ -48,6 +55,8 @@ class A2GCrewTool:
 
     CrewAI tools use a different interface than LangChain — this adapter
     handles the translation while maintaining deterministic governance.
+
+    Supports correlation_id and parent_receipt for lineage tracking.
     """
 
     def __init__(
@@ -55,17 +64,29 @@ class A2GCrewTool:
         tool: Any,  # crewai.tools.BaseTool
         a2g_client: A2GClient,
         a2g_tool_name: Optional[str] = None,
+        correlation_id: Optional[str] = None,
     ):
         self.tool = tool
         self.client = a2g_client
         self.a2g_tool_name = a2g_tool_name or getattr(tool, "name", "unknown")
+        self.correlation_id = correlation_id
+        self._last_verdict: Optional[A2GVerdict] = None
 
         # Preserve CrewAI tool interface
         self.name = getattr(tool, "name", "governed_tool")
         self.description = getattr(tool, "description", "A2G governed tool")
 
+    @property
+    def last_receipt_id(self) -> Optional[str]:
+        """Get the receipt ID from the last enforcement decision."""
+        return self._last_verdict.receipt_id if self._last_verdict else None
+
     def _run(self, *args, **kwargs) -> str:
         """Execute with A2G governance enforcement."""
+        # Extract lineage kwargs
+        corr_id = kwargs.pop("_correlation_id", self.correlation_id)
+        parent = kwargs.pop("_parent_receipt", None)
+
         # Build params from arguments
         params = {}
         if args:
@@ -74,11 +95,21 @@ class A2GCrewTool:
 
         # Enforce
         try:
-            verdict = self.client.enforce(tool=self.a2g_tool_name, params=params)
+            verdict = self.client.enforce(
+                tool=self.a2g_tool_name,
+                params=params,
+                correlation_id=corr_id,
+                parent_receipt=parent,
+            )
+            self._last_verdict = verdict
 
             logger.info(
-                "A2G [CrewAI]: tool=%s decision=%s receipt=%s",
-                self.a2g_tool_name, verdict.decision.value, verdict.receipt_id,
+                "A2G [CrewAI]: tool=%s decision=%s receipt=%s mandate=%s correlation=%s",
+                self.a2g_tool_name,
+                verdict.decision.value,
+                verdict.receipt_id,
+                verdict.mandate_hash[:16] + "…" if verdict.mandate_hash else "",
+                verdict.correlation_id or "none",
             )
 
             if verdict.allowed:
@@ -104,9 +135,15 @@ class A2GGovernedAgent:
     Each agent in a crew can have its own mandate with different
     permissions, boundaries, and rate limits.
 
+    Supports correlation_id so all tools used by this agent are
+    linked in the same cross-vendor correlation group.
+
     Usage:
         researcher_client = A2GClient(mandate_path="researcher.mandate.toml")
-        governed = A2GGovernedAgent(researcher_agent, researcher_client)
+        governed = A2GGovernedAgent(
+            researcher_agent, researcher_client,
+            correlation_id="crew-session-abc",
+        )
 
         # All of researcher's tools are now governed
         crew = Crew(agents=[governed.agent], tasks=[...])
@@ -117,10 +154,12 @@ class A2GGovernedAgent:
         agent: Any,  # crewai.Agent
         a2g_client: A2GClient,
         tool_name_map: Optional[dict[str, str]] = None,
+        correlation_id: Optional[str] = None,
     ):
         self.original_agent = agent
         self.client = a2g_client
         self.tool_name_map = tool_name_map or {}
+        self.correlation_id = correlation_id
 
         # Wrap all the agent's tools with A2G governance
         if hasattr(agent, "tools") and agent.tools:
@@ -131,6 +170,7 @@ class A2GGovernedAgent:
                     a2g_tool_name=self.tool_name_map.get(
                         getattr(t, "name", ""), getattr(t, "name", "unknown")
                     ),
+                    correlation_id=correlation_id,
                 )
                 for t in agent.tools
             ]
@@ -149,6 +189,7 @@ def govern_crew(
     crew: Any,  # crewai.Crew
     a2g_clients: dict[str, A2GClient],
     tool_name_maps: Optional[dict[str, dict[str, str]]] = None,
+    correlation_id: Optional[str] = None,
     validate_tasks: bool = True,
 ) -> Any:
     """
@@ -158,10 +199,13 @@ def govern_crew(
     so the researcher can read files but not execute commands,
     while the DevOps agent can execute but not read finance data.
 
+    All agents share the same correlation_id for cross-vendor tracing.
+
     Args:
         crew: CrewAI Crew instance
         a2g_clients: Map of agent role/name → A2GClient
         tool_name_maps: Optional per-agent tool name mappings
+        correlation_id: Shared UUID linking all crew decisions
         validate_tasks: Whether to validate tasks before execution
 
     Returns:
@@ -173,7 +217,7 @@ def govern_crew(
             "writer": A2GClient(mandate_path="writer.mandate.toml"),
             "reviewer": A2GClient(mandate_path="reviewer.mandate.toml"),
         }
-        governed = govern_crew(crew, clients)
+        governed = govern_crew(crew, clients, correlation_id="crew-run-001")
         result = governed.kickoff()
     """
     tool_name_maps = tool_name_maps or {}
@@ -185,6 +229,7 @@ def govern_crew(
                 agent=agent,
                 a2g_client=a2g_clients[agent_key],
                 tool_name_map=tool_name_maps.get(agent_key, {}),
+                correlation_id=correlation_id,
             )
             logger.info("A2G: Governed agent '%s'", agent_key)
         else:
@@ -289,12 +334,27 @@ if __name__ == "__main__":
         tools=[FileReadTool()],
     )
 
-    # 3. Govern the crew — every tool call enforced by A2G
+    # 3. Govern the crew with cross-vendor correlation
     crew = Crew(agents=[researcher, writer], tasks=[...])
-    governed = govern_crew(crew, clients)
+    governed = govern_crew(crew, clients, correlation_id="crew-run-001")
     result = governed.kickoff()
 
     # Researcher can search web (http_get) + read files (read_file)
     # Writer can only read files — web access DENIED
-    # Every decision logged to immutable audit trail
+    # Every decision logged with mandate_hash + correlation_id
+
+    # 4. Verify lineage of any decision
+    lineage = clients["Senior Researcher"].verify_lineage("receipt-uuid")
+    print(lineage.mandate_hash, lineage.lineage_complete)
+
+    # 5. Compress researcher's governance history
+    summary = clients["Senior Researcher"].compress(
+        agent_did="did:a2g:researcher",
+        start="2026-01-01T00:00:00Z",
+        end="2026-03-31T23:59:59Z",
+        key_path="sovereign.secret.key",
+        issuer_name="Trust Authority",
+        out_path="researcher-q1.json",
+    )
+    print(f"Compliance: {summary.compliance_rate}%")
     """)

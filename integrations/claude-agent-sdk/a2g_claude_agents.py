@@ -13,6 +13,13 @@ Architecture:
                               DENY  → return error tool_result
                               ESCALATE → return escalation + pause
 
+Features:
+    - Tool-level governance enforcement (ALLOW / DENY / ESCALATE)
+    - Cross-vendor correlation (link decisions across agent frameworks)
+    - Execution lineage (parent_receipt chaining for causal graphs)
+    - Trust compression (portable governance proofs via A2GClient.compress)
+    - Full agent loop with governance baked into the message cycle
+
 Usage:
     from a2g_claude_agents import A2GToolProcessor, governed_tool
 
@@ -49,12 +56,17 @@ class A2GToolProcessor:
     tool_use blocks and the application executes them. This processor
     sits in that loop and enforces governance before execution.
 
+    Supports correlation_id and parent_receipt for lineage tracking.
+
     Usage:
         import anthropic
         from a2g_claude_agents import A2GToolProcessor
 
         client = anthropic.Anthropic()
-        a2g = A2GToolProcessor(A2GClient(mandate_path="agent.mandate.toml"))
+        a2g = A2GToolProcessor(
+            A2GClient(mandate_path="agent.mandate.toml"),
+            correlation_id="session-abc",
+        )
 
         # Register tool handlers
         a2g.register("read_file", lambda params: open(params["path"]).read())
@@ -77,11 +89,19 @@ class A2GToolProcessor:
         self,
         a2g_client: A2GClient,
         fail_closed: bool = True,
+        correlation_id: Optional[str] = None,
     ):
         self.client = a2g_client
         self.fail_closed = fail_closed
+        self.correlation_id = correlation_id
         self.handlers: dict[str, Callable] = {}
         self.tool_name_map: dict[str, str] = {}
+        self._last_receipt_hash: Optional[str] = None
+
+    @property
+    def last_receipt_hash(self) -> Optional[str]:
+        """Get the receipt hash from the last enforcement decision (for chaining)."""
+        return self._last_receipt_hash
 
     def register(
         self,
@@ -101,7 +121,13 @@ class A2GToolProcessor:
         if a2g_tool_name:
             self.tool_name_map[tool_name] = a2g_tool_name
 
-    def process(self, tool_name: str, tool_input: dict) -> dict:
+    def process(
+        self,
+        tool_name: str,
+        tool_input: dict,
+        correlation_id: Optional[str] = None,
+        parent_receipt: Optional[str] = None,
+    ) -> dict:
         """
         Process a tool_use call with A2G governance.
 
@@ -110,22 +136,35 @@ class A2GToolProcessor:
         Args:
             tool_name: Tool name from Claude's tool_use block
             tool_input: Tool input parameters
+            correlation_id: Override correlation ID for this call
+            parent_receipt: Receipt hash from a preceding governed decision
 
         Returns:
-            dict with "type": "tool_result", "content": "...", "is_error": bool
+            dict with "content": "...", "is_error": bool
         """
         a2g_name = self.tool_name_map.get(tool_name, tool_name)
+        corr_id = correlation_id or self.correlation_id
+        parent = parent_receipt or self._last_receipt_hash
 
         # A2G Enforcement
         try:
             verdict = self.client.enforce(
                 tool=a2g_name,
                 params={k: str(v) for k, v in tool_input.items()},
+                correlation_id=corr_id,
+                parent_receipt=parent,
             )
 
+            # Store for automatic chaining
+            self._last_receipt_hash = verdict.receipt_id
+
             logger.info(
-                "A2G [Claude]: tool=%s decision=%s receipt=%s",
-                a2g_name, verdict.decision.value, verdict.receipt_id,
+                "A2G [Claude]: tool=%s decision=%s receipt=%s mandate=%s correlation=%s",
+                a2g_name,
+                verdict.decision.value,
+                verdict.receipt_id,
+                verdict.mandate_hash[:16] + "…" if verdict.mandate_hash else "",
+                verdict.correlation_id or "none",
             )
 
             if verdict.allowed:
@@ -164,6 +203,9 @@ class A2GToolProcessor:
         """
         Process all tool_use blocks in a Claude API response.
 
+        Automatically chains parent_receipt between tool calls
+        in the same response for causal lineage graphs.
+
         Returns a list of tool_result dicts ready to send back.
         """
         results = []
@@ -180,18 +222,28 @@ class A2GToolProcessor:
 
 # ── Tool Decorator ───────────────────────────────────────────────────
 
-def governed_tool(a2g_client: A2GClient, tool_name: str):
+def governed_tool(
+    a2g_client: A2GClient,
+    tool_name: str,
+    correlation_id: Optional[str] = None,
+):
     """
     Decorator for Claude Agent SDK tool functions.
 
+    Supports lineage tracking via correlation_id and parent_receipt.
+
     Usage:
-        @governed_tool(client, "read_file")
+        @governed_tool(client, "read_file", correlation_id="session-123")
         def read_file(path: str) -> str:
             return open(path).read()
     """
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            # Extract lineage kwargs
+            corr_id = kwargs.pop("_correlation_id", correlation_id)
+            parent = kwargs.pop("_parent_receipt", None)
+
             import inspect
             sig = inspect.signature(func)
             param_names = list(sig.parameters.keys())
@@ -202,11 +254,19 @@ def governed_tool(a2g_client: A2GClient, tool_name: str):
             params.update({k: str(v) for k, v in kwargs.items()})
 
             try:
-                verdict = a2g_client.enforce(tool=tool_name, params=params)
+                verdict = a2g_client.enforce(
+                    tool=tool_name,
+                    params=params,
+                    correlation_id=corr_id,
+                    parent_receipt=parent,
+                )
 
                 logger.info(
-                    "A2G [Claude]: tool=%s decision=%s receipt=%s",
-                    tool_name, verdict.decision.value, verdict.receipt_id,
+                    "A2G [Claude]: tool=%s decision=%s receipt=%s mandate=%s",
+                    tool_name,
+                    verdict.decision.value,
+                    verdict.receipt_id,
+                    verdict.mandate_hash[:16] + "…" if verdict.mandate_hash else "",
                 )
 
                 if verdict.allowed:
@@ -237,11 +297,18 @@ class A2GClaudeAgent:
     This is the highest-level integration — creates a fully governed
     Claude agent that handles the entire tool_use conversation loop.
 
+    Features:
+    - Every tool call governed by A2G mandate
+    - Automatic parent_receipt chaining across tool calls
+    - Cross-vendor correlation via correlation_id
+    - Full lineage reconstruction and trust compression via client
+
     Usage:
         agent = A2GClaudeAgent(
             a2g_client=A2GClient(mandate_path="agent.mandate.toml"),
             model="claude-sonnet-4-5-20250929",
             system="You are a data analyst. Read and process files.",
+            correlation_id="session-abc-123",
         )
 
         agent.register_tool(
@@ -261,12 +328,16 @@ class A2GClaudeAgent:
         system: str = "",
         max_turns: int = 10,
         api_key: Optional[str] = None,
+        correlation_id: Optional[str] = None,
     ):
         self.a2g_client = a2g_client
         self.model = model
         self.system = system
         self.max_turns = max_turns
-        self.processor = A2GToolProcessor(a2g_client)
+        self.processor = A2GToolProcessor(
+            a2g_client,
+            correlation_id=correlation_id,
+        )
         self.tool_definitions: list[dict] = []
         self._api_key = api_key
 
@@ -294,6 +365,7 @@ class A2GClaudeAgent:
         2. If Claude returns tool_use → enforce with A2G → execute if allowed
         3. Feed results back → repeat until Claude gives final answer
         4. Every tool call is governed, logged, and auditable
+        5. Parent receipts are automatically chained for lineage
         """
         try:
             import anthropic
@@ -324,7 +396,7 @@ class A2GClaudeAgent:
                 return ""
 
             elif response.stop_reason == "tool_use":
-                # Process all tool calls through A2G
+                # Process all tool calls through A2G (auto-chains parent_receipt)
                 tool_results = self.processor.process_response(response)
                 messages.append({"role": "user", "content": tool_results})
 
@@ -348,11 +420,12 @@ if __name__ == "__main__":
     # 1. Configure governance
     client = A2GClient(mandate_path="agent.mandate.toml", ledger_path="gov.db")
 
-    # 2. Create governed agent
+    # 2. Create governed agent with cross-vendor correlation
     agent = A2GClaudeAgent(
         a2g_client=client,
         model="claude-sonnet-4-5-20250929",
         system="You are a data analyst. Process files in the workspace.",
+        correlation_id="session-abc-123",
     )
 
     # 3. Register tools (each governed by mandate)
@@ -384,10 +457,25 @@ if __name__ == "__main__":
         )[1],
     )
 
-    # 4. Run — every tool call governed by A2G
+    # 4. Run — every tool call governed by A2G with full lineage
     result = agent.run("Read workspace/reports/q4.csv and summarize the revenue")
     print(result)
 
-    # 5. Audit what happened
+    # 5. Verify lineage of any decision
+    lineage = client.verify_lineage("receipt-uuid")
+    print(lineage.mandate_hash, lineage.lineage_complete)
+
+    # 6. Compress governance history into a trust proof
+    summary = client.compress(
+        agent_did="did:a2g:data-analyst",
+        start="2026-01-01T00:00:00Z",
+        end="2026-03-31T23:59:59Z",
+        key_path="sovereign.secret.key",
+        issuer_name="Trust Authority",
+        out_path="q1-summary.json",
+    )
+    print(f"Compliance: {summary.compliance_rate}%")
+
+    # 7. Audit what happened
     print(client.audit())
     """)

@@ -12,6 +12,13 @@ Architecture:
                                   DENY  → return error to agent
                                   ESCALATE → tripwire → halt agent
 
+Features:
+    - Function-level governance enforcement (ALLOW / DENY / ESCALATE)
+    - Cross-vendor correlation (link decisions across agent frameworks)
+    - Execution lineage (parent_receipt chaining for causal graphs)
+    - Trust compression (portable governance proofs via A2GClient.compress)
+    - Agent lifecycle management with kill switch
+
 Usage:
     from a2g_openai_agents import governed_function_tool, A2GGuardrail
 
@@ -47,6 +54,7 @@ def governed_function_tool(
     a2g_client: A2GClient,
     tool_name: str,
     param_extractor: Optional[Callable] = None,
+    correlation_id: Optional[str] = None,
 ):
     """
     Decorator that wraps an OpenAI Agents SDK function tool
@@ -56,13 +64,16 @@ def governed_function_tool(
     but A2G enforce() runs first. If DENIED, the function
     returns an error message instead of executing.
 
+    Supports lineage tracking via correlation_id and parent_receipt.
+
     Args:
         a2g_client: Configured A2GClient
         tool_name: A2G tool name for enforcement
         param_extractor: Optional function to extract params from args
+        correlation_id: UUID for cross-vendor correlation
 
     Usage:
-        @governed_function_tool(client, "read_file")
+        @governed_function_tool(client, "read_file", correlation_id="session-123")
         def read_file(path: str) -> str:
             '''Read a file from the workspace.'''
             return open(path).read()
@@ -75,6 +86,10 @@ def governed_function_tool(
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            # Extract lineage kwargs (not passed to wrapped function)
+            corr_id = kwargs.pop("_correlation_id", correlation_id)
+            parent = kwargs.pop("_parent_receipt", None)
+
             # Extract params for A2G enforcement
             if param_extractor:
                 params = param_extractor(*args, **kwargs)
@@ -90,11 +105,20 @@ def governed_function_tool(
 
             # A2G Enforcement
             try:
-                verdict = a2g_client.enforce(tool=tool_name, params=params)
+                verdict = a2g_client.enforce(
+                    tool=tool_name,
+                    params=params,
+                    correlation_id=corr_id,
+                    parent_receipt=parent,
+                )
 
                 logger.info(
-                    "A2G [OpenAI]: tool=%s decision=%s receipt=%s",
-                    tool_name, verdict.decision.value, verdict.receipt_id,
+                    "A2G [OpenAI]: tool=%s decision=%s receipt=%s mandate=%s correlation=%s",
+                    tool_name,
+                    verdict.decision.value,
+                    verdict.receipt_id,
+                    verdict.mandate_hash[:16] + "…" if verdict.mandate_hash else "",
+                    verdict.correlation_id or "none",
                 )
 
                 if verdict.allowed:
@@ -193,6 +217,7 @@ class A2GAgentLifecycle:
     - Tool governance during execution
     - Kill switch (revocation) for emergency shutdown
     - Audit trail queries
+    - Lineage verification and trust compression
 
     Usage:
         lifecycle = A2GAgentLifecycle(
@@ -205,6 +230,9 @@ class A2GAgentLifecycle:
 
         # Run agent
         result = lifecycle.run(agent, input_data)
+
+        # Verify lineage of a decision
+        lineage = lifecycle.verify_lineage("receipt-uuid")
 
         # Emergency stop
         lifecycle.kill("security incident detected")
@@ -248,6 +276,18 @@ class A2GAgentLifecycle:
         """Get this agent's recent governance decisions."""
         return self.client.audit(last=last)
 
+    def verify_lineage(self, receipt_id: str):
+        """Reconstruct full execution lineage from a receipt."""
+        return self.client.verify_lineage(receipt_id)
+
+    def compress(self, agent_did: str, start: str, end: str,
+                 key_path: str, issuer_name: str, out_path: str):
+        """Compress this agent's governance history into a trust proof."""
+        return self.client.compress(
+            agent_did=agent_did, start=start, end=end,
+            key_path=key_path, issuer_name=issuer_name, out_path=out_path,
+        )
+
 
 # ── Example ──────────────────────────────────────────────────────────
 
@@ -266,13 +306,13 @@ if __name__ == "__main__":
     lifecycle = A2GAgentLifecycle(client, "data-processor")
     lifecycle.verify_or_halt()
 
-    # 2. Define governed tools
-    @governed_function_tool(client, "read_file")
+    # 2. Define governed tools with cross-vendor correlation
+    @governed_function_tool(client, "read_file", correlation_id="session-123")
     def read_file(path: str) -> str:
         '''Read a file from the workspace.'''
         return open(path).read()
 
-    @governed_function_tool(client, "write_file")
+    @governed_function_tool(client, "write_file", correlation_id="session-123")
     def write_file(path: str, content: str) -> str:
         '''Write content to a file.'''
         with open(path, 'w') as f:
@@ -286,9 +326,18 @@ if __name__ == "__main__":
         tools=[read_file, write_file],
     )
 
-    # 4. Run — every tool call enforced by A2G
+    # 4. Run — every tool call enforced by A2G with lineage
     result = Runner.run_sync(agent, "Read workspace/reports/q4.csv and summarize it")
 
-    # 5. Emergency kill switch
+    # 5. Verify lineage + compress governance history
+    lineage = lifecycle.verify_lineage("receipt-uuid")
+    summary = lifecycle.compress(
+        agent_did="did:a2g:data-processor",
+        start="2026-01-01T00:00:00Z", end="2026-03-31T23:59:59Z",
+        key_path="sovereign.secret.key", issuer_name="Admin",
+        out_path="q1-summary.json",
+    )
+
+    # 6. Emergency kill switch
     # lifecycle.kill("anomalous behavior detected")
     """)

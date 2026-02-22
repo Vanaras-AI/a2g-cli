@@ -4,7 +4,7 @@
 
 A2G (Agent-to-Governance) is a Rust CLI that enforces what AI agents can and cannot do — before execution, not after. Every tool call passes through an 8-step cryptographic pipeline that produces an immutable audit trail. Zero LLM calls. Every decision is reproducible, verifiable, and legally auditable.
 
-Built by [Vanaras AI](https://github.com/vanaras-ai) as part of the AEON Engine project.
+Built by [Vanaras AI](https://github.com/Vanaras-AI).
 
 ## Why A2G
 
@@ -210,6 +210,6 @@ MIT
 
 ---
 
-**AEON Engine — Vanaras AI**
+**A2G Protocol — Vanaras AI**
 
-Protocol: A2G (Agent-to-Governance)
+Deterministic governance for autonomous AI agents.

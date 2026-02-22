@@ -22,6 +22,7 @@ pub struct LedgerEntry {
     pub decision: String,
     pub policy_rule: String,
     pub timestamp: String,
+    pub prev_hash: String,
     pub receipt_hash: String,
     pub mandate_hash: String,
     pub proposal_hash: String,
@@ -389,52 +390,68 @@ impl Ledger {
     }
 
     /// Atomically generate a receipt and append it to the ledger.
-    /// This eliminates the race condition where concurrent enforce() calls
-    /// could generate receipts with the same prev_hash.
+    ///
+    /// C2 FIX: Uses BEGIN IMMEDIATE to acquire the write lock BEFORE reading
+    /// the last hash. This prevents the TOCTOU race where concurrent processes
+    /// could read the same prev_hash and produce duplicate chain links.
+    /// SQLite's WAL mode + busy_timeout serializes IMMEDIATE transactions
+    /// across all processes sharing the same database file.
     pub fn enforce_and_record(
         &self,
         verdict: &Verdict,
     ) -> Result<crate::receipt::Receipt, Box<dyn std::error::Error>> {
-        // Use a transaction to serialize access
-        let tx = self.conn.unchecked_transaction()?;
+        // Acquire write lock IMMEDIATELY — blocks concurrent writers
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
 
-        // Read last hash inside the transaction
-        let last_hash: Option<String> = tx.query_row(
-            "SELECT receipt_hash FROM decisions ORDER BY seq DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        ).optional()?;
+        let result = (|| -> Result<crate::receipt::Receipt, Box<dyn std::error::Error>> {
+            // Read last hash inside the exclusive write lock
+            let last_hash: Option<String> = self.conn.query_row(
+                "SELECT receipt_hash FROM decisions ORDER BY seq DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            ).optional()?;
 
-        // Initialize chain and generate receipt atomically
-        crate::receipt::init_chain_from_ledger(last_hash.clone());
-        let receipt = crate::receipt::generate_receipt(verdict);
+            // Initialize chain and generate receipt atomically
+            crate::receipt::init_chain_from_ledger(last_hash);
+            let receipt = crate::receipt::generate_receipt(verdict);
 
-        // Append inside the same transaction
-        tx.execute(
-            "INSERT INTO decisions (
-                receipt_id, verdict_id, agent_did, agent_name,
-                tool, params_hash, decision, policy_rule,
-                policy_hash, timestamp, prev_hash, receipt_hash,
-                mandate_hash, proposal_hash, delegation_chain_hash,
-                issuer_did, authority_level, scope_hash,
-                correlation_id, parent_receipt_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-            params![
-                receipt.receipt_id, verdict.verdict_id,
-                verdict.agent_did, verdict.agent_name,
-                verdict.tool, verdict.params_hash,
-                verdict.decision.to_string(), verdict.policy_rule,
-                receipt.policy_hash, receipt.timestamp,
-                receipt.prev_hash, receipt.receipt_hash,
-                receipt.mandate_hash, receipt.proposal_hash,
-                receipt.delegation_chain_hash, receipt.issuer_did,
-                receipt.authority_level, receipt.scope_hash,
-                receipt.correlation_id, receipt.parent_receipt_hash,
-            ],
-        )?;
+            // Append inside the same transaction
+            self.conn.execute(
+                "INSERT INTO decisions (
+                    receipt_id, verdict_id, agent_did, agent_name,
+                    tool, params_hash, decision, policy_rule,
+                    policy_hash, timestamp, prev_hash, receipt_hash,
+                    mandate_hash, proposal_hash, delegation_chain_hash,
+                    issuer_did, authority_level, scope_hash,
+                    correlation_id, parent_receipt_hash
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                params![
+                    receipt.receipt_id, verdict.verdict_id,
+                    verdict.agent_did, verdict.agent_name,
+                    verdict.tool, verdict.params_hash,
+                    verdict.decision.to_string(), verdict.policy_rule,
+                    receipt.policy_hash, receipt.timestamp,
+                    receipt.prev_hash, receipt.receipt_hash,
+                    receipt.mandate_hash, receipt.proposal_hash,
+                    receipt.delegation_chain_hash, receipt.issuer_did,
+                    receipt.authority_level, receipt.scope_hash,
+                    receipt.correlation_id, receipt.parent_receipt_hash,
+                ],
+            )?;
 
-        tx.commit()?;
-        Ok(receipt)
+            Ok(receipt)
+        })();
+
+        match result {
+            Ok(receipt) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(receipt)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     /// Count recent decisions for an agent within the last N seconds
@@ -464,7 +481,7 @@ impl Ledger {
     ) -> Result<Vec<LedgerEntry>, Box<dyn std::error::Error>> {
         let mut sql = String::from(
             "SELECT seq, receipt_id, agent_did, agent_name, tool, params_hash,
-                    decision, policy_rule, timestamp, receipt_hash,
+                    decision, policy_rule, timestamp, prev_hash, receipt_hash,
                     mandate_hash, proposal_hash, delegation_chain_hash,
                     issuer_did, authority_level, scope_hash,
                     correlation_id, parent_receipt_hash
@@ -500,15 +517,16 @@ impl Ledger {
                     decision: row.get(6)?,
                     policy_rule: row.get(7)?,
                     timestamp: row.get(8)?,
-                    receipt_hash: row.get(9)?,
-                    mandate_hash: row.get(10)?,
-                    proposal_hash: row.get(11)?,
-                    delegation_chain_hash: row.get(12)?,
-                    issuer_did: row.get(13)?,
-                    authority_level: row.get(14)?,
-                    scope_hash: row.get(15)?,
-                    correlation_id: row.get(16)?,
-                    parent_receipt_hash: row.get(17)?,
+                    prev_hash: row.get(9)?,
+                    receipt_hash: row.get(10)?,
+                    mandate_hash: row.get(11)?,
+                    proposal_hash: row.get(12)?,
+                    delegation_chain_hash: row.get(13)?,
+                    issuer_did: row.get(14)?,
+                    authority_level: row.get(15)?,
+                    scope_hash: row.get(16)?,
+                    correlation_id: row.get(17)?,
+                    parent_receipt_hash: row.get(18)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -530,7 +548,7 @@ impl Ledger {
     pub fn query_decision_by_id(&self, receipt_id_or_hash: &str) -> Result<Option<LedgerEntry>, Box<dyn std::error::Error>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, receipt_id, agent_did, agent_name, tool, params_hash,
-                    decision, policy_rule, timestamp, receipt_hash,
+                    decision, policy_rule, timestamp, prev_hash, receipt_hash,
                     mandate_hash, proposal_hash, delegation_chain_hash,
                     issuer_did, authority_level, scope_hash,
                     correlation_id, parent_receipt_hash
@@ -547,15 +565,16 @@ impl Ledger {
                 decision: row.get(6)?,
                 policy_rule: row.get(7)?,
                 timestamp: row.get(8)?,
-                receipt_hash: row.get(9)?,
-                mandate_hash: row.get(10)?,
-                proposal_hash: row.get(11)?,
-                delegation_chain_hash: row.get(12)?,
-                issuer_did: row.get(13)?,
-                authority_level: row.get(14)?,
-                scope_hash: row.get(15)?,
-                correlation_id: row.get(16)?,
-                parent_receipt_hash: row.get(17)?,
+                prev_hash: row.get(9)?,
+                receipt_hash: row.get(10)?,
+                mandate_hash: row.get(11)?,
+                proposal_hash: row.get(12)?,
+                delegation_chain_hash: row.get(13)?,
+                issuer_did: row.get(14)?,
+                authority_level: row.get(15)?,
+                scope_hash: row.get(16)?,
+                correlation_id: row.get(17)?,
+                parent_receipt_hash: row.get(18)?,
             })
         }).optional()?;
         Ok(result)
@@ -624,7 +643,7 @@ impl Ledger {
     ) -> Result<Vec<LedgerEntry>, Box<dyn std::error::Error>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, receipt_id, agent_did, agent_name, tool, params_hash,
-                    decision, policy_rule, timestamp, receipt_hash,
+                    decision, policy_rule, timestamp, prev_hash, receipt_hash,
                     mandate_hash, proposal_hash, delegation_chain_hash,
                     issuer_did, authority_level, scope_hash,
                     correlation_id, parent_receipt_hash
@@ -644,15 +663,16 @@ impl Ledger {
                 decision: row.get(6)?,
                 policy_rule: row.get(7)?,
                 timestamp: row.get(8)?,
-                receipt_hash: row.get(9)?,
-                mandate_hash: row.get(10)?,
-                proposal_hash: row.get(11)?,
-                delegation_chain_hash: row.get(12)?,
-                issuer_did: row.get(13)?,
-                authority_level: row.get(14)?,
-                scope_hash: row.get(15)?,
-                correlation_id: row.get(16)?,
-                parent_receipt_hash: row.get(17)?,
+                prev_hash: row.get(9)?,
+                receipt_hash: row.get(10)?,
+                mandate_hash: row.get(11)?,
+                proposal_hash: row.get(12)?,
+                delegation_chain_hash: row.get(13)?,
+                issuer_did: row.get(14)?,
+                authority_level: row.get(15)?,
+                scope_hash: row.get(16)?,
+                correlation_id: row.get(17)?,
+                parent_receipt_hash: row.get(18)?,
             })
         })?.collect::<Result<Vec<_>, _>>()?;
 
@@ -711,11 +731,9 @@ mod tests {
     #[test]
     fn test_append_and_query() {
         let db = temp_ledger();
-        // Sync chain from ledger before generating receipt
-        receipt::init_chain_from_ledger(db.last_receipt_hash().unwrap());
+        // Use enforce_and_record which handles chain state atomically (C2 fix)
         let v = make_verdict("read_file", Decision::Allow);
-        let r = receipt::generate_receipt(&v);
-        db.append(&v, &r).unwrap();
+        let _r = db.enforce_and_record(&v).unwrap();
 
         let entries = db.query(None, None, 10).unwrap();
         assert_eq!(entries.len(), 1);
@@ -727,11 +745,9 @@ mod tests {
     fn test_rate_limiting() {
         let db = temp_ledger();
         for _ in 0..5 {
-            // Re-sync chain from ledger before each receipt (handles parallel test interference)
-            receipt::init_chain_from_ledger(db.last_receipt_hash().unwrap());
+            // Use enforce_and_record which handles chain state atomically (C2 fix)
             let v = make_verdict("write_file", Decision::Allow);
-            let r = receipt::generate_receipt(&v);
-            db.append(&v, &r).unwrap();
+            let _r = db.enforce_and_record(&v).unwrap();
         }
 
         let count = db.count_recent("did:a2g:test", 60).unwrap();
