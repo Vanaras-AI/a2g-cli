@@ -1,0 +1,37 @@
+[package]
+name = "a2g"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic governance protocol for autonomous AI agents"
+license = "MIT"
+repository = "https://github.com/Vanaras-AI/A2G"
+
+[[bin]]
+name = "a2g"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Crypto
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+bs58 = "0.5"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Identity
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Ledger
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Regex (output governance)
+regex = "1"
