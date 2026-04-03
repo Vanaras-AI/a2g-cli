@@ -16,12 +16,19 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: a2g-linux-x86_64
+            ext: ""
           - target: aarch64-apple-darwin
             os: macos-latest
             name: a2g-macos-arm64
+            ext: ""
           - target: x86_64-apple-darwin
             os: macos-latest
             name: a2g-macos-x86_64
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: a2g-windows-x86_64
+            ext: ".exe"
 
     runs-on: ${{ matrix.os }}
 
@@ -36,17 +43,25 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package binary (unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/a2g dist/${{ matrix.name }}
           chmod +x dist/${{ matrix.name }}
 
+      - name: Package binary (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item "target/${{ matrix.target }}/release/a2g.exe" "dist/${{ matrix.name }}.exe"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: dist/${{ matrix.name }}
+          path: dist/${{ matrix.name }}${{ matrix.ext }}
 
   release:
     needs: build
@@ -68,3 +83,4 @@ jobs:
             artifacts/a2g-linux-x86_64/a2g-linux-x86_64
             artifacts/a2g-macos-arm64/a2g-macos-arm64
             artifacts/a2g-macos-x86_64/a2g-macos-x86_64
+            artifacts/a2g-windows-x86_64/a2g-windows-x86_64.exe
