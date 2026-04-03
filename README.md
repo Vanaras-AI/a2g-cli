@@ -147,9 +147,51 @@ The protocol includes defenses against:
 - **SQLite write starvation**: `PRAGMA busy_timeout = 5000` on all connections
 - **Delegation escape**: Revoked delegations checked at enforcement time, not just signing time
 
+## Execution Lineage
+
+Every receipt carries full provenance metadata:
+
+- **mandate_hash** — SHA-256 of the exact mandate version used
+- **proposal_hash** — links to the governance proposal that approved this mandate
+- **delegation_chain_hash** — links to the authority delegation chain
+- **correlation_id** — UUID linking related decisions across vendors and frameworks
+- **parent_receipt_hash** — receipt hash of the triggering decision (causal graph)
+
+Reconstruct the full lineage of any decision:
+```python
+lineage = client.verify_lineage("receipt-uuid-here")
+print(lineage.mandate_hash)          # which mandate version authorized this
+print(lineage.issuer_did)            # who signed the mandate
+print(lineage.authority_level)       # ROOT / DEPARTMENT / TEAM / OPERATOR
+print(lineage.lineage_complete)      # True if full chain is intact
+```
+
+## Trust Compression
+
+Compress an agent's governance history into a signed, portable trust proof:
+
+```bash
+a2g compress --agent did:a2g:my-agent \
+    --start 2026-01-01T00:00:00Z --end 2026-03-31T23:59:59Z \
+    --ledger gov.db --key sovereign.secret.key \
+    --issuer-name "Trust Authority" --out q1-summary.json
+```
+
+The trust summary includes:
+- Decision aggregates (total, compliance rate, deny rate, escalation rate)
+- Tool usage breakdown and authority coverage
+- Merkle root of all receipt hashes (verify without full ledger)
+- Hash-chain integrity flag
+- ed25519 signature by the issuing authority
+
+```bash
+# Verify a trust summary
+a2g verify-summary --summary q1-summary.json
+```
+
 ## Framework Integrations
 
-Drop-in governance for 5 major AI agent frameworks. See [`integrations/README.md`](integrations/README.md) for full docs.
+Drop-in governance for 5 major AI agent frameworks. See [`integrations/`](integrations/) for full docs and code.
 
 | Framework | Pattern | Lines to Add |
 |-----------|---------|-------------|
@@ -158,6 +200,44 @@ Drop-in governance for 5 major AI agent frameworks. See [`integrations/README.md
 | OpenAI Agents SDK | Function decorator + Guardrail | 3 |
 | MCP Server | Governed MCP server (any client) | CLI only |
 | Claude Agent SDK | Tool processor + Agent loop | 3 |
+
+**LangChain:**
+```python
+from a2g_client import A2GClient
+from a2g_langchain import A2GToolkit
+
+client = A2GClient(mandate_path="my-agent.mandate.toml")
+toolkit = A2GToolkit(tools=your_tools, a2g_client=client)
+agent = create_react_agent(llm, toolkit.governed_tools)
+```
+
+**CrewAI:**
+```python
+from a2g_crewai import govern_crew
+governed = govern_crew(crew, {"Agent": A2GClient(mandate_path="agent.mandate.toml")})
+result = governed.kickoff()
+```
+
+**OpenAI Agents SDK:**
+```python
+from a2g_openai_agents import governed_function_tool
+
+@governed_function_tool(client, "read_file")
+def read_file(path: str) -> str:
+    return open(path).read()
+```
+
+**MCP Server:**
+```bash
+python integrations/mcp-server/a2g_mcp_server.py --mandate agent.mandate.toml
+```
+
+**Claude Agent SDK:**
+```python
+from a2g_claude_agents import A2GClaudeAgent
+agent = A2GClaudeAgent(a2g_client=client, model="claude-sonnet-4-5-20250929")
+result = agent.run("Analyze the Q4 report")
+```
 
 ## Project Structure
 
