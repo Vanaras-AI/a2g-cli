@@ -82,13 +82,25 @@ pub fn generate_receipt(verdict: &Verdict) -> Receipt {
 
     // Lineage extension (only affects hash when populated)
     if !verdict.mandate_hash.is_empty() {
-        hash_input.push_str(&format!(":{}:{}", verdict.mandate_hash, verdict.proposal_hash));
+        hash_input.push_str(&format!(
+            ":{}:{}",
+            verdict.mandate_hash, verdict.proposal_hash
+        ));
     }
     if !verdict.delegation_chain_hash.is_empty() {
-        hash_input.push_str(&format!(":{}:{}:{}:{}", verdict.delegation_chain_hash, verdict.issuer_did, verdict.authority_level, verdict.scope_hash));
+        hash_input.push_str(&format!(
+            ":{}:{}:{}:{}",
+            verdict.delegation_chain_hash,
+            verdict.issuer_did,
+            verdict.authority_level,
+            verdict.scope_hash
+        ));
     }
     if !verdict.correlation_id.is_empty() {
-        hash_input.push_str(&format!(":{}:{}", verdict.correlation_id, verdict.parent_receipt_hash));
+        hash_input.push_str(&format!(
+            ":{}:{}",
+            verdict.correlation_id, verdict.parent_receipt_hash
+        ));
     }
 
     let receipt_hash = hex::encode(Sha256::digest(hash_input.as_bytes()));
@@ -136,13 +148,25 @@ pub fn verify_receipt(receipt: &Receipt) -> bool {
 
     // Lineage extension (only affects hash when populated)
     if !receipt.mandate_hash.is_empty() {
-        hash_input.push_str(&format!(":{}:{}", receipt.mandate_hash, receipt.proposal_hash));
+        hash_input.push_str(&format!(
+            ":{}:{}",
+            receipt.mandate_hash, receipt.proposal_hash
+        ));
     }
     if !receipt.delegation_chain_hash.is_empty() {
-        hash_input.push_str(&format!(":{}:{}:{}:{}", receipt.delegation_chain_hash, receipt.issuer_did, receipt.authority_level, receipt.scope_hash));
+        hash_input.push_str(&format!(
+            ":{}:{}:{}:{}",
+            receipt.delegation_chain_hash,
+            receipt.issuer_did,
+            receipt.authority_level,
+            receipt.scope_hash
+        ));
     }
     if !receipt.correlation_id.is_empty() {
-        hash_input.push_str(&format!(":{}:{}", receipt.correlation_id, receipt.parent_receipt_hash));
+        hash_input.push_str(&format!(
+            ":{}:{}",
+            receipt.correlation_id, receipt.parent_receipt_hash
+        ));
     }
 
     let computed = hex::encode(Sha256::digest(hash_input.as_bytes()));
@@ -237,7 +261,8 @@ mod tests {
         init_chain_from_ledger(None);
         let mut rcpt = generate_receipt(&verdict);
         // Corrupt the hash
-        rcpt.receipt_hash = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        rcpt.receipt_hash =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         assert!(!verify_receipt(&rcpt));
     }
 }

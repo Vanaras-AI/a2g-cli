@@ -78,7 +78,8 @@ pub fn compress_window(
         return Err(format!(
             "no decisions found for agent '{}' between {} and {}",
             agent_did, start, end
-        ).into());
+        )
+        .into());
     }
 
     let total = entries.len() as u64;
@@ -105,10 +106,14 @@ pub fn compress_window(
         // Accumulate counts
         *decision_counts.entry(entry.decision.clone()).or_insert(0) += 1;
         *tool_counts.entry(entry.tool.clone()).or_insert(0) += 1;
-        *policy_rules_hit.entry(entry.policy_rule.clone()).or_insert(0) += 1;
+        *policy_rules_hit
+            .entry(entry.policy_rule.clone())
+            .or_insert(0) += 1;
 
         if !entry.authority_level.is_empty() {
-            *authority_coverage.entry(entry.authority_level.clone()).or_insert(0) += 1;
+            *authority_coverage
+                .entry(entry.authority_level.clone())
+                .or_insert(0) += 1;
         }
         if !entry.mandate_hash.is_empty() {
             mandate_hashes.insert(entry.mandate_hash.clone());
@@ -139,9 +144,21 @@ pub fn compress_window(
     let deny_count = decision_counts.get("DENY").copied().unwrap_or(0);
     let escalate_count = decision_counts.get("ESCALATE").copied().unwrap_or(0);
 
-    let compliance_rate = if total > 0 { (allow_count as f64 / total as f64) * 100.0 } else { 0.0 };
-    let deny_rate = if total > 0 { (deny_count as f64 / total as f64) * 100.0 } else { 0.0 };
-    let escalation_rate = if total > 0 { (escalate_count as f64 / total as f64) * 100.0 } else { 0.0 };
+    let compliance_rate = if total > 0 {
+        (allow_count as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let deny_rate = if total > 0 {
+        (deny_count as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    let escalation_rate = if total > 0 {
+        (escalate_count as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
 
     let root = merkle_root(&receipt_hashes);
 
@@ -276,17 +293,21 @@ pub fn verify_summary(summary: &TrustSummary) -> Result<bool, Box<dyn std::error
 
     // Verify ed25519 signature
     let pubkey_bytes = hex::decode(&summary.issuer_pubkey)?;
-    let pubkey_array: [u8; 32] = pubkey_bytes.try_into()
+    let pubkey_array: [u8; 32] = pubkey_bytes
+        .try_into()
         .map_err(|_| "invalid public key length")?;
     let verifying_key = VerifyingKey::from_bytes(&pubkey_array)?;
 
     let sig_bytes = hex::decode(&summary.signature)?;
-    let sig_array: [u8; 64] = sig_bytes.try_into()
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
         .map_err(|_| "invalid signature length")?;
     let signature = Signature::from_bytes(&sig_array);
 
     let sign_payload = format!("TRUST_SUMMARY:{}", summary.summary_hash);
-    Ok(verifying_key.verify(sign_payload.as_bytes(), &signature).is_ok())
+    Ok(verifying_key
+        .verify(sign_payload.as_bytes(), &signature)
+        .is_ok())
 }
 
 /// Compute the Merkle root of a list of hash strings
@@ -351,7 +372,12 @@ mod tests {
     #[test]
     fn test_compress_empty_window() {
         let db = crate::ledger::Ledger::open(Path::new(":memory:")).unwrap();
-        let result = compress_window(&db, "did:a2g:nobody", "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z");
+        let result = compress_window(
+            &db,
+            "did:a2g:nobody",
+            "2020-01-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no decisions"));
     }
@@ -362,7 +388,13 @@ mod tests {
         let v = make_test_verdict("did:a2g:alice", "read_file", Decision::Allow);
         db.enforce_and_record(&v).unwrap();
 
-        let data = compress_window(&db, "did:a2g:alice", "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z").unwrap();
+        let data = compress_window(
+            &db,
+            "did:a2g:alice",
+            "2020-01-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        )
+        .unwrap();
         assert_eq!(data.total_decisions, 1);
         assert_eq!(data.compliance_rate, 100.0);
         assert_eq!(data.deny_rate, 0.0);
@@ -384,7 +416,13 @@ mod tests {
         let v = make_test_verdict("did:a2g:bob", "exec_cmd", Decision::Escalate);
         db.enforce_and_record(&v).unwrap();
 
-        let data = compress_window(&db, "did:a2g:bob", "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z").unwrap();
+        let data = compress_window(
+            &db,
+            "did:a2g:bob",
+            "2020-01-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        )
+        .unwrap();
         assert_eq!(data.total_decisions, 5);
         assert_eq!(*data.decision_counts.get("ALLOW").unwrap(), 3);
         assert_eq!(*data.decision_counts.get("DENY").unwrap(), 1);
@@ -403,21 +441,13 @@ mod tests {
 
     #[test]
     fn test_merkle_root_multiple() {
-        let hashes = vec![
-            "aaa".to_string(),
-            "bbb".to_string(),
-            "ccc".to_string(),
-        ];
+        let hashes = vec!["aaa".to_string(), "bbb".to_string(), "ccc".to_string()];
         let root1 = merkle_root(&hashes);
         let root2 = merkle_root(&hashes);
         assert_eq!(root1, root2); // deterministic
 
         // Different order → different root
-        let hashes2 = vec![
-            "bbb".to_string(),
-            "aaa".to_string(),
-            "ccc".to_string(),
-        ];
+        let hashes2 = vec!["bbb".to_string(), "aaa".to_string(), "ccc".to_string()];
         let root3 = merkle_root(&hashes2);
         assert_ne!(root1, root3);
     }
@@ -428,7 +458,13 @@ mod tests {
         let v = make_test_verdict("did:a2g:charlie", "read_file", Decision::Allow);
         db.enforce_and_record(&v).unwrap();
 
-        let data = compress_window(&db, "did:a2g:charlie", "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z").unwrap();
+        let data = compress_window(
+            &db,
+            "did:a2g:charlie",
+            "2020-01-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        )
+        .unwrap();
 
         let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
         let issuer_did = "did:a2g:authority";
@@ -445,10 +481,17 @@ mod tests {
         let v = make_test_verdict("did:a2g:dave", "read_file", Decision::Allow);
         db.enforce_and_record(&v).unwrap();
 
-        let data = compress_window(&db, "did:a2g:dave", "2020-01-01T00:00:00Z", "2099-01-01T00:00:00Z").unwrap();
+        let data = compress_window(
+            &db,
+            "did:a2g:dave",
+            "2020-01-01T00:00:00Z",
+            "2099-01-01T00:00:00Z",
+        )
+        .unwrap();
 
         let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
-        let mut summary = sign_summary(data, &signing_key, "did:a2g:authority", "Test Authority").unwrap();
+        let mut summary =
+            sign_summary(data, &signing_key, "did:a2g:authority", "Test Authority").unwrap();
 
         // Tamper with the summary
         summary.total_decisions = 999;

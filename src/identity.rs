@@ -13,7 +13,10 @@ pub fn generate_agent_keypair() -> (String, String, String) {
 
     let secret_hex = hex::encode(signing_key.to_bytes());
     let public_hex = hex::encode(verifying_key.to_bytes());
-    let did = format!("did:a2g:{}", bs58::encode(verifying_key.to_bytes()).into_string());
+    let did = format!(
+        "did:a2g:{}",
+        bs58::encode(verifying_key.to_bytes()).into_string()
+    );
 
     (did, secret_hex, public_hex)
 }

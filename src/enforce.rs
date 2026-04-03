@@ -63,9 +63,7 @@ pub fn enforce(
     ledger: &Ledger,
 ) -> Result<Verdict, Box<dyn std::error::Error>> {
     let now = Utc::now();
-    let params_hash = hex::encode(Sha256::digest(
-        serde_json::to_string(params)?.as_bytes(),
-    ));
+    let params_hash = hex::encode(Sha256::digest(serde_json::to_string(params)?.as_bytes()));
 
     // Parse mandate
     let m: Mandate = toml::from_str(mandate_str)?;
@@ -163,7 +161,8 @@ pub fn enforce(
 
         // Strip workspace_root prefix for relative glob matching
         let path = if let Some(ref root) = workspace_root {
-            full_path.strip_prefix(root)
+            full_path
+                .strip_prefix(root)
                 .map(|p| p.trim_start_matches('/'))
                 .unwrap_or(&full_path)
                 .to_string()
@@ -177,7 +176,10 @@ pub fn enforce(
             if glob_matches(pattern, path) {
                 return Ok(make_verdict(
                     Decision::Deny,
-                    &format!("boundary_violation: path '{}' matches fs_deny '{}'", path, pattern),
+                    &format!(
+                        "boundary_violation: path '{}' matches fs_deny '{}'",
+                        path, pattern
+                    ),
                 ));
             }
         }
@@ -231,10 +233,7 @@ pub fn enforce(
                 if !allowed {
                     return Ok(make_verdict(
                         Decision::Deny,
-                        &format!(
-                            "boundary_violation: host '{}' blocked by net_deny",
-                            host
-                        ),
+                        &format!("boundary_violation: host '{}' blocked by net_deny", host),
                     ));
                 }
             }
@@ -274,7 +273,8 @@ pub fn enforce(
 
     // ── Step 5: Jurisdiction Check ──
     if !m.jurisdiction.operating_hours.is_empty() {
-        let (start_hour, start_min, end_hour, end_min) = validate_operating_hours(&m.jurisdiction.operating_hours)?;
+        let (start_hour, start_min, end_hour, end_min) =
+            validate_operating_hours(&m.jurisdiction.operating_hours)?;
         let current_hour = now.hour();
         let current_min = now.minute();
         let current_total = current_hour * 60 + current_min;
@@ -299,7 +299,11 @@ pub fn enforce(
             &format!(
                 "escalation_required: tool '{}' requires approval from {}",
                 tool,
-                if m.escalation.escalate_to.is_empty() { "higher authority" } else { &m.escalation.escalate_to }
+                if m.escalation.escalate_to.is_empty() {
+                    "higher authority"
+                } else {
+                    &m.escalation.escalate_to
+                }
             ),
         ));
     }
@@ -308,7 +312,8 @@ pub fn enforce(
 
         // Strip workspace_root prefix for relative glob matching (same as boundary checks)
         let epath = if let Some(ref root) = workspace_root {
-            full_epath.strip_prefix(root)
+            full_epath
+                .strip_prefix(root)
                 .map(|p| p.trim_start_matches('/'))
                 .unwrap_or(&full_epath)
                 .to_string()
@@ -321,7 +326,10 @@ pub fn enforce(
             if glob_matches(pattern, epath) {
                 return Ok(make_verdict(
                     Decision::Escalate,
-                    &format!("escalation_required: path '{}' matches escalate_paths '{}'", epath, pattern),
+                    &format!(
+                        "escalation_required: path '{}' matches escalate_paths '{}'",
+                        epath, pattern
+                    ),
                 ));
             }
         }
@@ -332,7 +340,10 @@ pub fn enforce(
             if glob_matches(pattern, &ehost) {
                 return Ok(make_verdict(
                     Decision::Escalate,
-                    &format!("escalation_required: host '{}' matches escalate_hosts '{}'", ehost, pattern),
+                    &format!(
+                        "escalation_required: host '{}' matches escalate_hosts '{}'",
+                        ehost, pattern
+                    ),
                 ));
             }
         }
@@ -356,10 +367,16 @@ pub fn enforce(
 
 /// Validate jurisdiction operating_hours format (HH:MM-HH:MM)
 /// Returns tuple of (start_hour, start_min, end_hour, end_min) on success
-fn validate_operating_hours(hours_str: &str) -> Result<(u32, u32, u32, u32), Box<dyn std::error::Error>> {
+fn validate_operating_hours(
+    hours_str: &str,
+) -> Result<(u32, u32, u32, u32), Box<dyn std::error::Error>> {
     let parts: Vec<&str> = hours_str.split('-').collect();
     if parts.len() != 2 {
-        return Err(format!("invalid operating_hours format '{}': expected HH:MM-HH:MM", hours_str).into());
+        return Err(format!(
+            "invalid operating_hours format '{}': expected HH:MM-HH:MM",
+            hours_str
+        )
+        .into());
     }
     let start = parts[0].trim();
     let end = parts[1].trim();
@@ -369,8 +386,12 @@ fn validate_operating_hours(hours_str: &str) -> Result<(u32, u32, u32, u32), Box
         if time_parts.len() != 2 {
             return Err(format!("invalid time '{}': expected HH:MM", time_str).into());
         }
-        let hour: u32 = time_parts[0].parse().map_err(|_| format!("invalid hour in '{}'", time_str))?;
-        let minute: u32 = time_parts[1].parse().map_err(|_| format!("invalid minute in '{}'", time_str))?;
+        let hour: u32 = time_parts[0]
+            .parse()
+            .map_err(|_| format!("invalid hour in '{}'", time_str))?;
+        let minute: u32 = time_parts[1]
+            .parse()
+            .map_err(|_| format!("invalid minute in '{}'", time_str))?;
         if hour > 23 {
             return Err(format!("hour {} exceeds 23 in '{}'", hour, time_str).into());
         }
@@ -386,7 +407,11 @@ fn validate_operating_hours(hours_str: &str) -> Result<(u32, u32, u32, u32), Box
     let start_total = sh * 60 + sm;
     let end_total = eh * 60 + em;
     if start_total >= end_total {
-        return Err(format!("operating_hours start '{}' must be before end '{}'", start, end).into());
+        return Err(format!(
+            "operating_hours start '{}' must be before end '{}'",
+            start, end
+        )
+        .into());
     }
 
     Ok((sh, sm, eh, em))
@@ -481,7 +506,8 @@ fn simple_wildcard_match(pattern: &str, text: &str) -> bool {
     if parts.len() == 2 {
         let prefix = parts[0];
         let suffix = parts[1];
-        return text.starts_with(prefix) && text.ends_with(suffix)
+        return text.starts_with(prefix)
+            && text.ends_with(suffix)
             && text.len() >= prefix.len() + suffix.len();
     }
 
@@ -540,22 +566,40 @@ mod tests {
     #[test]
     fn test_canonicalize_path() {
         // Basic traversal attack
-        assert_eq!(canonicalize_path("/home/user/../../etc/passwd"), "/etc/passwd");
+        assert_eq!(
+            canonicalize_path("/home/user/../../etc/passwd"),
+            "/etc/passwd"
+        );
         // Double dots at start of absolute path
         assert_eq!(canonicalize_path("/../../../etc/shadow"), "/etc/shadow");
         // Current dir references
-        assert_eq!(canonicalize_path("/home/./user/./file.txt"), "/home/user/file.txt");
+        assert_eq!(
+            canonicalize_path("/home/./user/./file.txt"),
+            "/home/user/file.txt"
+        );
         // Double slashes
-        assert_eq!(canonicalize_path("/home//user///file.txt"), "/home/user/file.txt");
+        assert_eq!(
+            canonicalize_path("/home//user///file.txt"),
+            "/home/user/file.txt"
+        );
         // Relative path traversal
-        assert_eq!(canonicalize_path("workspace/../../../etc/passwd"), "../../etc/passwd");
+        assert_eq!(
+            canonicalize_path("workspace/../../../etc/passwd"),
+            "../../etc/passwd"
+        );
         // Clean path stays clean
-        assert_eq!(canonicalize_path("/home/user/file.txt"), "/home/user/file.txt");
+        assert_eq!(
+            canonicalize_path("/home/user/file.txt"),
+            "/home/user/file.txt"
+        );
     }
 
     #[test]
     fn test_extract_host() {
-        assert_eq!(extract_host("https://api.openai.com/v1/chat"), "api.openai.com");
+        assert_eq!(
+            extract_host("https://api.openai.com/v1/chat"),
+            "api.openai.com"
+        );
         assert_eq!(extract_host("http://localhost:8080/test"), "localhost");
     }
 
@@ -601,14 +645,11 @@ mod tests {
         // Replace workspace_root with an absolute path
         template = template.replace(
             "workspace_root = \"\"",
-            "workspace_root = \"/home/agent/workspace\""
+            "workspace_root = \"/home/agent/workspace\"",
         );
 
         // Set boundaries to use relative glob
-        template = template.replace(
-            "fs_read = [\"workspace/**\"]",
-            "fs_read = [\"**/*.txt\"]"
-        );
+        template = template.replace("fs_read = [\"workspace/**\"]", "fs_read = [\"**/*.txt\"]");
 
         let signed = crate::mandate::sign_mandate(&template, &sov_secret, 24).unwrap();
         let db = crate::ledger::Ledger::open(&std::path::PathBuf::from(":memory:")).unwrap();
@@ -619,7 +660,11 @@ mod tests {
         });
 
         let result = enforce(&signed, "read_file", &params, &db).unwrap();
-        assert_eq!(result.decision, Decision::Allow, "Expected ALLOW for file within workspace matching pattern");
+        assert_eq!(
+            result.decision,
+            Decision::Allow,
+            "Expected ALLOW for file within workspace matching pattern"
+        );
     }
 
     #[test]
@@ -632,7 +677,7 @@ mod tests {
         // Leave workspace_root empty
         template = template.replace(
             "fs_read = [\"workspace/**\"]",
-            "fs_read = [\"/home/agent/workspace/**\"]"
+            "fs_read = [\"/home/agent/workspace/**\"]",
         );
 
         let signed = crate::mandate::sign_mandate(&template, &sov_secret, 24).unwrap();
@@ -657,7 +702,7 @@ mod tests {
         // Set workspace_root
         template = template.replace(
             "workspace_root = \"\"",
-            "workspace_root = \"/home/agent/workspace\""
+            "workspace_root = \"/home/agent/workspace\"",
         );
 
         // Keep fs_deny with absolute path
@@ -672,7 +717,11 @@ mod tests {
         });
 
         let result = enforce(&signed, "read_file", &params, &db).unwrap();
-        assert_eq!(result.decision, Decision::Deny, "Expected DENY for /etc/passwd matching fs_deny");
+        assert_eq!(
+            result.decision,
+            Decision::Deny,
+            "Expected DENY for /etc/passwd matching fs_deny"
+        );
         assert!(result.policy_rule.contains("boundary_violation"));
     }
 }

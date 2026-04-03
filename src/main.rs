@@ -8,16 +8,16 @@
 //!   a2g receipt  — Verify a governance receipt
 //!   a2g audit    — Query the decision ledger
 
-mod identity;
-mod mandate;
-mod enforce;
-mod receipt;
-mod ledger;
-mod output_gov;
 mod authority;
-mod proposal;
-mod test_harness;
+mod enforce;
+mod identity;
+mod ledger;
 mod lineage;
+mod mandate;
+mod output_gov;
+mod proposal;
+mod receipt;
+mod test_harness;
 mod trust_summary;
 mod visual_receipt;
 
@@ -27,7 +27,11 @@ use std::path::PathBuf;
 /// Validate a name parameter to prevent path traversal
 fn validate_name(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
-        return Err(format!("invalid name '{}': must not contain '..', '/', '\\', or null bytes", name).into());
+        return Err(format!(
+            "invalid name '{}': must not contain '..', '/', '\\', or null bytes",
+            name
+        )
+        .into());
     }
     if name.len() > 256 {
         return Err("name exceeds maximum length of 256 characters".into());
@@ -392,49 +396,184 @@ fn main() {
     let result = match cli.command {
         Commands::Init { name, out } => cmd_init(&name, &out, output_format),
         Commands::Sovereign { out } => cmd_sovereign(&out, output_format),
-        Commands::Sign { mandate, key, ttl, proposal } => cmd_sign(&mandate, &key, ttl, &proposal, output_format),
+        Commands::Sign {
+            mandate,
+            key,
+            ttl,
+            proposal,
+        } => cmd_sign(&mandate, &key, ttl, &proposal, output_format),
         Commands::Verify { mandate } => cmd_verify(&mandate, output_format),
-        Commands::Enforce { mandate, tool, params, ledger, authority_chain, correlation_id, parent_receipt } => {
-            cmd_enforce(&mandate, &tool, &params, &ledger, authority_chain, correlation_id, parent_receipt, output_format)
-        }
-        Commands::Receipt { receipt, engine_key } => cmd_receipt(&receipt, &engine_key, output_format),
-        Commands::Revoke { mandate, ledger, reason } => cmd_revoke(&mandate, &ledger, &reason, output_format),
-        Commands::Audit { ledger, agent, decision, last } => {
-            cmd_audit(&ledger, agent.as_deref(), decision.as_deref(), last, output_format)
-        }
-        Commands::AuthorityRoot { key, name, ttl, region, environment, out, ledger, tools, max_rate_limit, max_ttl, max_mandates } => {
-            cmd_authority_root(&key, &name, ttl, &region, &environment, &out, &ledger, &tools, max_rate_limit, max_ttl, max_mandates, output_format)
-        }
-        Commands::Propose { proposer, name, mandate, justification, ttl, out, ledger } => {
-            cmd_propose(&proposer, &name, &mandate, &justification, ttl, &out, &ledger, output_format)
-        }
-        Commands::Review { proposal: prop, key, reviewer_name, decision, reason, ledger } => {
-            cmd_review(&prop, &key, &reviewer_name, &decision, &reason, &ledger, output_format)
-        }
-        Commands::AuthorityLog { ledger, event_type, actor, last } => {
-            cmd_authority_log(&ledger, event_type.as_deref(), actor.as_deref(), last, output_format)
-        }
-        Commands::Delegate { parent, key, grantee, grantee_name, level, tools, ttl, out, ledger } => {
-            cmd_delegate(&parent, &key, &grantee, &grantee_name, &level, &tools, ttl, &out, &ledger, output_format)
-        }
-        Commands::RevokeDelegation { delegation, ledger, reason } => {
-            cmd_revoke_delegation(&delegation, &ledger, &reason, output_format)
-        }
+        Commands::Enforce {
+            mandate,
+            tool,
+            params,
+            ledger,
+            authority_chain,
+            correlation_id,
+            parent_receipt,
+        } => cmd_enforce(
+            &mandate,
+            &tool,
+            &params,
+            &ledger,
+            authority_chain,
+            correlation_id,
+            parent_receipt,
+            output_format,
+        ),
+        Commands::Receipt {
+            receipt,
+            engine_key,
+        } => cmd_receipt(&receipt, &engine_key, output_format),
+        Commands::Revoke {
+            mandate,
+            ledger,
+            reason,
+        } => cmd_revoke(&mandate, &ledger, &reason, output_format),
+        Commands::Audit {
+            ledger,
+            agent,
+            decision,
+            last,
+        } => cmd_audit(
+            &ledger,
+            agent.as_deref(),
+            decision.as_deref(),
+            last,
+            output_format,
+        ),
+        Commands::AuthorityRoot {
+            key,
+            name,
+            ttl,
+            region,
+            environment,
+            out,
+            ledger,
+            tools,
+            max_rate_limit,
+            max_ttl,
+            max_mandates,
+        } => cmd_authority_root(
+            &key,
+            &name,
+            ttl,
+            &region,
+            &environment,
+            &out,
+            &ledger,
+            &tools,
+            max_rate_limit,
+            max_ttl,
+            max_mandates,
+            output_format,
+        ),
+        Commands::Propose {
+            proposer,
+            name,
+            mandate,
+            justification,
+            ttl,
+            out,
+            ledger,
+        } => cmd_propose(
+            &proposer,
+            &name,
+            &mandate,
+            &justification,
+            ttl,
+            &out,
+            &ledger,
+            output_format,
+        ),
+        Commands::Review {
+            proposal: prop,
+            key,
+            reviewer_name,
+            decision,
+            reason,
+            ledger,
+        } => cmd_review(
+            &prop,
+            &key,
+            &reviewer_name,
+            &decision,
+            &reason,
+            &ledger,
+            output_format,
+        ),
+        Commands::AuthorityLog {
+            ledger,
+            event_type,
+            actor,
+            last,
+        } => cmd_authority_log(
+            &ledger,
+            event_type.as_deref(),
+            actor.as_deref(),
+            last,
+            output_format,
+        ),
+        Commands::Delegate {
+            parent,
+            key,
+            grantee,
+            grantee_name,
+            level,
+            tools,
+            ttl,
+            out,
+            ledger,
+        } => cmd_delegate(
+            &parent,
+            &key,
+            &grantee,
+            &grantee_name,
+            &level,
+            &tools,
+            ttl,
+            &out,
+            &ledger,
+            output_format,
+        ),
+        Commands::RevokeDelegation {
+            delegation,
+            ledger,
+            reason,
+        } => cmd_revoke_delegation(&delegation, &ledger, &reason, output_format),
         Commands::Test { suite, ledger, tag } => {
             cmd_test(&suite, &ledger, tag.as_deref(), output_format)
         }
         Commands::VerifyLineage { receipt, ledger } => {
             cmd_verify_lineage(&receipt, &ledger, output_format)
         }
-        Commands::Compress { agent, start, end, ledger, key, issuer_name, out, min_decisions } => {
-            cmd_compress(&agent, &start, &end, &ledger, &key, &issuer_name, &out, min_decisions, output_format)
-        }
-        Commands::VerifySummary { summary } => {
-            cmd_verify_summary(&summary, output_format)
-        }
-        Commands::VisualReceipt { receipt, ledger, format, out } => {
-            cmd_visual_receipt(&receipt, &ledger, &format, out.as_ref())
-        }
+        Commands::Compress {
+            agent,
+            start,
+            end,
+            ledger,
+            key,
+            issuer_name,
+            out,
+            min_decisions,
+        } => cmd_compress(
+            &agent,
+            &start,
+            &end,
+            &ledger,
+            &key,
+            &issuer_name,
+            &out,
+            min_decisions,
+            output_format,
+        ),
+        Commands::VerifySummary { summary } => cmd_verify_summary(&summary, output_format),
+        Commands::VisualReceipt {
+            receipt,
+            ledger,
+            format,
+            out,
+        } => cmd_visual_receipt(&receipt, &ledger, &format, out.as_ref()),
     };
 
     if let Err(e) = result {
@@ -445,7 +584,11 @@ fn main() {
 
 // ── Commands ──────────────────────────────────────────────────────────
 
-fn cmd_init(name: &str, out: &PathBuf, output_format: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_init(
+    name: &str,
+    out: &PathBuf,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Validate name parameter
     validate_name(name)?;
 
@@ -471,7 +614,7 @@ fn cmd_init(name: &str, out: &PathBuf, output_format: &str) -> Result<(), Box<dy
     let abs_out = std::fs::canonicalize(out).unwrap_or_else(|_| out.clone());
     template = template.replace(
         "workspace_root = \"\"",
-        &format!("workspace_root = \"{}\"", abs_out.display())
+        &format!("workspace_root = \"{}\"", abs_out.display()),
     );
 
     let mandate_path = out.join(format!("{}.mandate.toml", name));
@@ -490,7 +633,10 @@ fn cmd_init(name: &str, out: &PathBuf, output_format: &str) -> Result<(), Box<dy
         println!("agent DID   → {}", did);
         println!("mandate     → {}", mandate_path.display());
         println!("\nnext: edit the mandate, then sign it:");
-        println!("  a2g sign --mandate {} --key <sovereign.secret.key> --ttl 24", mandate_path.display());
+        println!(
+            "  a2g sign --mandate {} --key <sovereign.secret.key> --ttl 24",
+            mandate_path.display()
+        );
     }
 
     Ok(())
@@ -520,7 +666,10 @@ fn cmd_sovereign(out: &PathBuf, output_format: &str) -> Result<(), Box<dyn std::
         println!("sovereign public key  → {}", pk_path.display());
         println!("sovereign DID         → {}", did);
         println!("\nuse this key to sign agent mandates:");
-        println!("  a2g sign --mandate <agent>.mandate.toml --key {} --ttl 24", sk_path.display());
+        println!(
+            "  a2g sign --mandate <agent>.mandate.toml --key {} --ttl 24",
+            sk_path.display()
+        );
     }
 
     Ok(())
@@ -533,8 +682,8 @@ fn cmd_sign(
     proposal_path: &PathBuf,
     output_format: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use sha2::{Digest, Sha256};
     use chrono::DateTime;
+    use sha2::{Digest, Sha256};
 
     // Validate TTL
     validate_ttl(ttl_hours)?;
@@ -548,20 +697,13 @@ fn cmd_sign(
 
     // Check proposal status is "Approved"
     if prop.status != proposal::ProposalStatus::Approved {
-        return Err(format!(
-            "proposal is not approved (status: {})",
-            prop.status
-        )
-        .into());
+        return Err(format!("proposal is not approved (status: {})", prop.status).into());
     }
 
     // C1 FIX: Check proposal has not expired
     if let Ok(expires) = DateTime::parse_from_rfc3339(&prop.expires_at) {
         if chrono::Utc::now() >= expires {
-            return Err(format!(
-                "proposal has expired (expired at {})",
-                prop.expires_at
-            ).into());
+            return Err(format!("proposal has expired (expired at {})", prop.expires_at).into());
         }
     }
 
@@ -571,8 +713,7 @@ fn cmd_sign(
     // Compare to proposal.mandate_hash — prevents mandate modification after approval
     if mandate_body_hash != prop.mandate_hash {
         return Err(
-            "mandate modified after proposal approval: hash mismatch (governance violation)"
-                .into(),
+            "mandate modified after proposal approval: hash mismatch (governance violation)".into(),
         );
     }
 
@@ -602,7 +743,10 @@ fn cmd_sign(
     Ok(())
 }
 
-fn cmd_verify(mandate_path: &PathBuf, output_format: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_verify(
+    mandate_path: &PathBuf,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mandate_str = std::fs::read_to_string(mandate_path)?;
 
     match mandate::verify_mandate(&mandate_str) {
@@ -703,7 +847,10 @@ fn cmd_enforce(
                 } else {
                     println!("DENY ✗");
                     println!("  reason: delegation revoked");
-                    println!("  detail: delegation {} has been revoked", &d.delegation_hash[..16]);
+                    println!(
+                        "  detail: delegation {} has been revoked",
+                        &d.delegation_hash[..16]
+                    );
                 }
                 std::process::exit(1);
             }
@@ -729,12 +876,11 @@ fn cmd_enforce(
         }
 
         // Get the leaf delegation for scope validation
-        let leaf_delegation = chain
-            .last()
-            .ok_or("authority chain is empty")?;
+        let leaf_delegation = chain.last().ok_or("authority chain is empty")?;
 
         // Validate mandate against authority scope
-        if let Err(e) = authority::validate_mandate_against_authority(&mandate_str, leaf_delegation) {
+        if let Err(e) = authority::validate_mandate_against_authority(&mandate_str, leaf_delegation)
+        {
             if output_format == "json" {
                 let output = serde_json::json!({
                     "decision": "DENY",
@@ -751,7 +897,8 @@ fn cmd_enforce(
         }
 
         // Phase 2: Compute delegation chain hash and authority lineage
-        let chain_hash_input: String = chain.iter()
+        let chain_hash_input: String = chain
+            .iter()
             .map(|d| d.delegation_hash.as_str())
             .collect::<Vec<_>>()
             .join(":");
@@ -775,7 +922,10 @@ fn cmd_enforce(
         } else {
             println!("authority chain verified ✓");
             println!("  chain depth: {}", chain_validation.chain_depth);
-            println!("  root:        {}", truncate(&chain_validation.root_did, 24));
+            println!(
+                "  root:        {}",
+                truncate(&chain_validation.root_did, 24)
+            );
         }
     }
 
@@ -884,7 +1034,11 @@ fn cmd_enforce(
     Ok(())
 }
 
-fn cmd_receipt(receipt_str: &str, _engine_key_path: &PathBuf, output_format: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_receipt(
+    receipt_str: &str,
+    _engine_key_path: &PathBuf,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Try as file path first, then as raw JSON
     let json_str = if std::path::Path::new(receipt_str).exists() {
         std::fs::read_to_string(receipt_str)?
@@ -959,7 +1113,10 @@ fn cmd_revoke(
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         println!("mandate REVOKED ✓");
-        println!("  agent:  {} ({})", m.mandate.agent_name, m.mandate.agent_did);
+        println!(
+            "  agent:  {} ({})",
+            m.mandate.agent_name, m.mandate.agent_did
+        );
         println!("  hash:   {}…", &mandate_hash[..16]);
         println!("  reason: {}", reason);
         println!("\nall future enforce calls against this mandate will return DENY.");
@@ -988,21 +1145,27 @@ fn cmd_audit(
     }
 
     if output_format == "json" {
-        let entries_json: Vec<serde_json::Value> = entries.iter().map(|e| {
-            serde_json::json!({
-                "seq": e.seq,
-                "receipt_id": e.receipt_id,
-                "agent_did": e.agent_did,
-                "agent_name": e.agent_name,
-                "tool": e.tool,
-                "decision": e.decision,
-                "policy_rule": e.policy_rule,
-                "timestamp": e.timestamp,
+        let entries_json: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "seq": e.seq,
+                    "receipt_id": e.receipt_id,
+                    "agent_did": e.agent_did,
+                    "agent_name": e.agent_name,
+                    "tool": e.tool,
+                    "decision": e.decision,
+                    "policy_rule": e.policy_rule,
+                    "timestamp": e.timestamp,
+                })
             })
-        }).collect();
+            .collect();
         println!("{}", serde_json::to_string_pretty(&entries_json)?);
     } else {
-        println!("{:<6} {:<8} {:<20} {:<16} {}", "seq", "decision", "agent", "tool", "timestamp");
+        println!(
+            "{:<6} {:<8} {:<20} {:<16} {}",
+            "seq", "decision", "agent", "tool", "timestamp"
+        );
         println!("{}", "-".repeat(80));
 
         for e in &entries {
@@ -1045,8 +1208,13 @@ fn cmd_authority_root(
     // Parse tools: if tools_str is non-empty, split by comma; otherwise use defaults
     let allowed_tools = if tools_str.is_empty() {
         vec![
-            "read_file".into(), "write_file".into(), "read".into(), "write".into(),
-            "http_get".into(), "http_post".into(), "execute".into(),
+            "read_file".into(),
+            "write_file".into(),
+            "read".into(),
+            "write".into(),
+            "http_get".into(),
+            "http_post".into(),
+            "execute".into(),
         ]
     } else {
         tools_str
@@ -1073,9 +1241,8 @@ fn cmd_authority_root(
         operating_hours: String::new(),
     };
 
-    let delegation = authority::create_root_delegation(
-        &key_hex, name, scope, jurisdiction, ttl_hours,
-    )?;
+    let delegation =
+        authority::create_root_delegation(&key_hex, name, scope, jurisdiction, ttl_hours)?;
 
     // Write delegation JSON
     let json = serde_json::to_string_pretty(&delegation)?;
@@ -1087,7 +1254,10 @@ fn cmd_authority_root(
         "root_delegation",
         &delegation.grantor_did,
         &delegation.grantee_did,
-        &format!("create_root(level={}, ttl={}h)", delegation.level, ttl_hours),
+        &format!(
+            "create_root(level={}, ttl={}h)",
+            delegation.level, ttl_hours
+        ),
         &delegation.delegation_hash,
         &delegation.jurisdiction.region,
         &format!("name={}", name),
@@ -1101,11 +1271,17 @@ fn cmd_authority_root(
         println!("  DID:        {}", delegation.grantee_did);
         println!("  level:      {}", delegation.level);
         println!("  expires:    {}", delegation.expires_at);
-        println!("  region:     {}", if region.is_empty() { "global" } else { region });
+        println!(
+            "  region:     {}",
+            if region.is_empty() { "global" } else { region }
+        );
         println!("  hash:       {}…", &delegation.delegation_hash[..16]);
         println!("  output:     {}", out_path.display());
         println!("\nnext: delegate authority to departments/teams:");
-        println!("  a2g delegate --parent {} --grantee <did> --level department", out_path.display());
+        println!(
+            "  a2g delegate --parent {} --grantee <did> --level department",
+            out_path.display()
+        );
     }
 
     Ok(())
@@ -1127,9 +1303,8 @@ fn cmd_propose(
 
     let mandate_body = std::fs::read_to_string(mandate_path)?;
 
-    let prop = proposal::create_proposal(
-        proposer_did, name, &mandate_body, justification, ttl_hours,
-    )?;
+    let prop =
+        proposal::create_proposal(proposer_did, name, &mandate_body, justification, ttl_hours)?;
 
     // Write proposal JSON
     let json = serde_json::to_string_pretty(&prop)?;
@@ -1141,7 +1316,10 @@ fn cmd_propose(
         "proposal_created",
         proposer_did,
         proposer_did,
-        &format!("propose(risk={}, approvals_needed={})", prop.risk_level, prop.required_approvals),
+        &format!(
+            "propose(risk={}, approvals_needed={})",
+            prop.risk_level, prop.required_approvals
+        ),
         &prop.proposal_hash,
         "",
         &format!("name={}, justification={}", name, justification),
@@ -1149,9 +1327,13 @@ fn cmd_propose(
 
     // Phase 3: Log proposal to proposal history
     db.log_proposal(
-        &prop.proposal_id, proposer_did, &prop.mandate_hash,
-        &prop.proposal_hash, &prop.status.to_string(),
-        &prop.risk_level.to_string(), prop.required_approvals,
+        &prop.proposal_id,
+        proposer_did,
+        &prop.mandate_hash,
+        &prop.proposal_hash,
+        &prop.status.to_string(),
+        &prop.risk_level.to_string(),
+        prop.required_approvals,
         &prop.created_at,
     )?;
 
@@ -1191,12 +1373,16 @@ fn cmd_review(
         "approve" => proposal::ReviewDecision::Approve,
         "reject" => proposal::ReviewDecision::Reject,
         "request-changes" | "request_changes" => proposal::ReviewDecision::RequestChanges,
-        _ => return Err(format!("invalid decision '{}': use approve, reject, or request-changes", decision_str).into()),
+        _ => {
+            return Err(format!(
+                "invalid decision '{}': use approve, reject, or request-changes",
+                decision_str
+            )
+            .into())
+        }
     };
 
-    let review = proposal::review_proposal(
-        &mut prop, &key_hex, reviewer_name, decision, reason,
-    )?;
+    let review = proposal::review_proposal(&mut prop, &key_hex, reviewer_name, decision, reason)?;
 
     // Write updated proposal back
     let json = serde_json::to_string_pretty(&prop)?;
@@ -1208,13 +1394,18 @@ fn cmd_review(
         "proposal_reviewed",
         &review.reviewer_did,
         &prop.proposer_did,
-        &format!("review(decision={}, status={})", review.decision, prop.status),
+        &format!(
+            "review(decision={}, status={})",
+            review.decision, prop.status
+        ),
         &prop.proposal_hash,
         "",
         &format!("reviewer={}, reason={}", reviewer_name, reason),
     )?;
 
-    let approvals = prop.reviews.iter()
+    let approvals = prop
+        .reviews
+        .iter()
         .filter(|r| r.decision == proposal::ReviewDecision::Approve)
         .count();
 
@@ -1222,9 +1413,16 @@ fn cmd_review(
         println!("{}", serde_json::to_string_pretty(&prop)?);
     } else {
         println!("REVIEW SUBMITTED ✓");
-        println!("  reviewer:   {} ({})", reviewer_name, truncate(&review.reviewer_did, 24));
+        println!(
+            "  reviewer:   {} ({})",
+            reviewer_name,
+            truncate(&review.reviewer_did, 24)
+        );
         println!("  decision:   {}", review.decision);
-        println!("  reason:     {}", if reason.is_empty() { "(none)" } else { reason });
+        println!(
+            "  reason:     {}",
+            if reason.is_empty() { "(none)" } else { reason }
+        );
         println!("  approvals:  {}/{}", approvals, prop.required_approvals);
         println!("  status:     {}", prop.status);
 
@@ -1259,20 +1457,26 @@ fn cmd_authority_log(
     }
 
     if output_format == "json" {
-        let entries_json: Vec<serde_json::Value> = entries.iter().map(|e| {
-            serde_json::json!({
-                "seq": e.seq,
-                "event_type": e.event_type,
-                "actor_did": e.actor_did,
-                "target_did": e.target_did,
-                "action": e.action,
-                "jurisdiction": e.jurisdiction,
-                "timestamp": e.timestamp,
+        let entries_json: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "seq": e.seq,
+                    "event_type": e.event_type,
+                    "actor_did": e.actor_did,
+                    "target_did": e.target_did,
+                    "action": e.action,
+                    "jurisdiction": e.jurisdiction,
+                    "timestamp": e.timestamp,
+                })
             })
-        }).collect();
+            .collect();
         println!("{}", serde_json::to_string_pretty(&entries_json)?);
     } else {
-        println!("{:<6} {:<22} {:<20} {:<30} {}", "seq", "event", "actor", "action", "timestamp");
+        println!(
+            "{:<6} {:<22} {:<20} {:<30} {}",
+            "seq", "event", "actor", "action", "timestamp"
+        );
         println!("{}", "-".repeat(100));
 
         for e in &entries {
@@ -1318,11 +1522,13 @@ fn cmd_delegate(
         "department" => authority::AuthorityLevel::Department,
         "team" => authority::AuthorityLevel::Team,
         "operator" => authority::AuthorityLevel::Operator,
-        _ => return Err(format!(
-            "invalid authority level '{}': use department, team, or operator",
-            level_str
-        )
-        .into()),
+        _ => {
+            return Err(format!(
+                "invalid authority level '{}': use department, team, or operator",
+                level_str
+            )
+            .into())
+        }
     };
 
     // Parse tools (comma-separated)
@@ -1387,10 +1593,16 @@ fn cmd_delegate(
     } else {
         println!("DELEGATION CREATED ✓");
         println!("  grantor:    {}", delegation.grantor_did);
-        println!("  grantee:    {} ({})", grantee_name, delegation.grantee_did);
+        println!(
+            "  grantee:    {} ({})",
+            grantee_name, delegation.grantee_did
+        );
         println!("  level:      {}", delegation.level);
         println!("  expires:    {}", delegation.expires_at);
-        println!("  tools:      {}", delegation.scope.allowed_tools.join(", "));
+        println!(
+            "  tools:      {}",
+            delegation.scope.allowed_tools.join(", ")
+        );
         println!("  max_ttl:    {}h", delegation.scope.max_ttl_hours);
         println!("  hash:       {}…", &delegation.delegation_hash[..16]);
         println!("  output:     {}", out_path.display());
@@ -1431,7 +1643,10 @@ fn cmd_revoke_delegation(
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         println!("DELEGATION REVOKED ✓");
-        println!("  grantee:  {} ({})", delegation.grantee_name, delegation.grantee_did);
+        println!(
+            "  grantee:  {} ({})",
+            delegation.grantee_name, delegation.grantee_did
+        );
         println!("  hash:     {}…", &delegation.delegation_hash[..16]);
         println!("  reason:   {}", reason);
     }
@@ -1470,7 +1685,10 @@ fn cmd_test(
             let icon = if r.passed { "✓" } else { "✗" };
             println!("  {} {} {}", icon, status, r.test_id);
             if !r.passed {
-                println!("      expected: {} ({})", r.expected_decision, r.expected_rule);
+                println!(
+                    "      expected: {} ({})",
+                    r.expected_decision, r.expected_rule
+                );
                 println!("      actual:   {} ({})", r.actual_decision, r.actual_rule);
                 println!("      reason:   {}", r.reason);
             }
@@ -1512,19 +1730,75 @@ fn cmd_verify_lineage(
                 println!("  rule:        {}", lin.policy_rule);
                 println!();
                 println!("POLICY VERSION");
-                println!("  mandate:     {}", if lin.mandate_hash.is_empty() { "(not captured)" } else { &lin.mandate_hash[..16] });
-                println!("  proposal:    {}", if lin.proposal_hash.is_empty() { "(not captured)" } else { &lin.proposal_hash[..16] });
+                println!(
+                    "  mandate:     {}",
+                    if lin.mandate_hash.is_empty() {
+                        "(not captured)"
+                    } else {
+                        &lin.mandate_hash[..16]
+                    }
+                );
+                println!(
+                    "  proposal:    {}",
+                    if lin.proposal_hash.is_empty() {
+                        "(not captured)"
+                    } else {
+                        &lin.proposal_hash[..16]
+                    }
+                );
                 println!();
                 println!("AUTHORITY CONTEXT");
                 let issuer_display = truncate(&lin.issuer_did, 30);
-                println!("  issuer:      {}", if lin.issuer_did.is_empty() { "(not captured)" } else { &issuer_display });
-                println!("  chain:       {}", if lin.delegation_chain_hash.is_empty() { "(not captured)" } else { &lin.delegation_chain_hash[..16] });
-                println!("  level:       {}", if lin.authority_level.is_empty() { "(not captured)" } else { &lin.authority_level });
-                println!("  scope:       {}", if lin.scope_hash.is_empty() { "(not captured)" } else { &lin.scope_hash[..16] });
+                println!(
+                    "  issuer:      {}",
+                    if lin.issuer_did.is_empty() {
+                        "(not captured)"
+                    } else {
+                        &issuer_display
+                    }
+                );
+                println!(
+                    "  chain:       {}",
+                    if lin.delegation_chain_hash.is_empty() {
+                        "(not captured)"
+                    } else {
+                        &lin.delegation_chain_hash[..16]
+                    }
+                );
+                println!(
+                    "  level:       {}",
+                    if lin.authority_level.is_empty() {
+                        "(not captured)"
+                    } else {
+                        &lin.authority_level
+                    }
+                );
+                println!(
+                    "  scope:       {}",
+                    if lin.scope_hash.is_empty() {
+                        "(not captured)"
+                    } else {
+                        &lin.scope_hash[..16]
+                    }
+                );
                 println!();
                 println!("CORRELATION");
-                println!("  correlation: {}", if lin.correlation_id.is_empty() { "(none)" } else { &lin.correlation_id });
-                println!("  parent:      {}", if lin.parent_receipt_hash.is_empty() { "(none)" } else { &lin.parent_receipt_hash[..16] });
+                println!(
+                    "  correlation: {}",
+                    if lin.correlation_id.is_empty() {
+                        "(none)"
+                    } else {
+                        &lin.correlation_id
+                    }
+                );
+                println!(
+                    "  parent:      {}",
+                    if lin.parent_receipt_hash.is_empty() {
+                        "(none)"
+                    } else {
+                        &lin.parent_receipt_hash[..16]
+                    }
+                );
 
                 if let Some(ref parent) = lin.parent_lineage {
                     println!();
@@ -1578,7 +1852,8 @@ fn cmd_compress(
         return Err(format!(
             "only {} decisions found (minimum {} required)",
             count, min_decisions
-        ).into());
+        )
+        .into());
     }
 
     // Compress the window
@@ -1587,13 +1862,17 @@ fn cmd_compress(
     // Load signing key
     let key_hex = std::fs::read_to_string(key_path)?.trim().to_string();
     let key_bytes = hex::decode(&key_hex)?;
-    let key_array: [u8; 32] = key_bytes.try_into()
+    let key_array: [u8; 32] = key_bytes
+        .try_into()
         .map_err(|_| "invalid secret key length (expected 32 bytes / 64 hex chars)")?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_array);
 
     // Derive issuer DID from signing key
     let issuer_pubkey = signing_key.verifying_key();
-    let issuer_did = format!("did:a2g:{}", bs58::encode(issuer_pubkey.to_bytes()).into_string());
+    let issuer_did = format!(
+        "did:a2g:{}",
+        bs58::encode(issuer_pubkey.to_bytes()).into_string()
+    );
 
     // Sign the summary
     let summary = trust_summary::sign_summary(data, &signing_key, &issuer_did, issuer_name)?;
@@ -1608,7 +1887,10 @@ fn cmd_compress(
         println!("TRUST SUMMARY COMPRESSED");
         println!("{}", "=".repeat(60));
         println!("  agent:       {}", summary.agent_did);
-        println!("  window:      {} → {}", summary.window_start, summary.window_end);
+        println!(
+            "  window:      {} → {}",
+            summary.window_start, summary.window_end
+        );
         println!("  decisions:   {}", summary.total_decisions);
         println!("  compliance:  {:.1}%", summary.compliance_rate);
         println!("  deny rate:   {:.1}%", summary.deny_rate);
@@ -1616,8 +1898,19 @@ fn cmd_compress(
         println!("  tools:       {} unique", summary.unique_tools);
         println!("  mandates:    {} unique", summary.unique_mandates);
         println!("  merkle root: {}…", &summary.merkle_root[..16]);
-        println!("  chain:       {}", if summary.chain_intact { "INTACT ✓" } else { "BROKEN ✗" });
-        println!("  signed by:   {} ({})", summary.issuer_name, truncate(&summary.issuer_did, 30));
+        println!(
+            "  chain:       {}",
+            if summary.chain_intact {
+                "INTACT ✓"
+            } else {
+                "BROKEN ✗"
+            }
+        );
+        println!(
+            "  signed by:   {} ({})",
+            summary.issuer_name,
+            truncate(&summary.issuer_did, 30)
+        );
         println!();
         println!("  output:      {}", out_path.display());
     }
@@ -1653,12 +1946,25 @@ fn cmd_verify_summary(
         println!("TRUST SUMMARY VERIFICATION");
         println!("{}", "=".repeat(60));
         println!("  agent:       {}", summary.agent_did);
-        println!("  window:      {} → {}", summary.window_start, summary.window_end);
+        println!(
+            "  window:      {} → {}",
+            summary.window_start, summary.window_end
+        );
         println!("  decisions:   {}", summary.total_decisions);
         println!("  compliance:  {:.1}%", summary.compliance_rate);
         println!("  merkle root: {}…", &summary.merkle_root[..16]);
-        println!("  chain:       {}", if summary.chain_intact { "INTACT ✓" } else { "BROKEN ✗" });
-        println!("  signature:   {}", if valid { "VALID ✓" } else { "INVALID ✗" });
+        println!(
+            "  chain:       {}",
+            if summary.chain_intact {
+                "INTACT ✓"
+            } else {
+                "BROKEN ✗"
+            }
+        );
+        println!(
+            "  signature:   {}",
+            if valid { "VALID ✓" } else { "INVALID ✗" }
+        );
     }
 
     if !valid {
@@ -1677,7 +1983,8 @@ fn cmd_visual_receipt(
     let db = ledger::Ledger::open(ledger_path)?;
 
     // Lookup the receipt in the ledger
-    let entry = db.query_decision_by_id(receipt_id)?
+    let entry = db
+        .query_decision_by_id(receipt_id)?
         .ok_or_else(|| format!("receipt '{}' not found in ledger", receipt_id))?;
 
     // Try to reconstruct lineage (non-fatal if it fails)

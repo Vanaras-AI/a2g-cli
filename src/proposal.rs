@@ -7,7 +7,7 @@
 //! This is the "who decides this agent should have these powers" layer.
 
 use chrono::Utc;
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey, Signature};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -144,9 +144,23 @@ pub fn assess_risk(mandate_str: &str) -> Result<RiskLevel, Box<dyn std::error::E
     let mut score: u32 = 0;
 
     // Tool risk scoring
-    let write_tools = ["write_file", "write", "delete", "delete_file", "move", "rename"];
+    let write_tools = [
+        "write_file",
+        "write",
+        "delete",
+        "delete_file",
+        "move",
+        "rename",
+    ];
     let exec_tools = ["execute", "exec", "shell", "command", "run"];
-    let net_tools = ["http_get", "http_post", "http_put", "http_delete", "fetch", "curl"];
+    let net_tools = [
+        "http_get",
+        "http_post",
+        "http_put",
+        "http_delete",
+        "fetch",
+        "curl",
+    ];
 
     for tool in &m.capabilities.tools {
         let t = tool.to_lowercase();
@@ -204,9 +218,13 @@ pub fn create_proposal(
 
     let hash_input = format!(
         "{}:{}:{}:{}:{}:{}:{}",
-        proposal_id, proposer_did, mandate_hash,
-        risk_level, required_approvals,
-        now.to_rfc3339(), expires.to_rfc3339(),
+        proposal_id,
+        proposer_did,
+        mandate_hash,
+        risk_level,
+        required_approvals,
+        now.to_rfc3339(),
+        expires.to_rfc3339(),
     );
     let proposal_hash = hex::encode(Sha256::digest(hash_input.as_bytes()));
 
@@ -241,7 +259,9 @@ pub fn review_proposal(
     }
 
     // Check proposal hasn't expired
-    let expires = proposal.expires_at.parse::<chrono::DateTime<Utc>>()
+    let expires = proposal
+        .expires_at
+        .parse::<chrono::DateTime<Utc>>()
         .map_err(|_| "invalid proposal expires_at")?;
     if Utc::now() >= expires {
         proposal.status = ProposalStatus::Expired;
@@ -260,7 +280,11 @@ pub fn review_proposal(
     );
 
     // Check reviewer hasn't already reviewed
-    if proposal.reviews.iter().any(|r| r.reviewer_did == reviewer_did) {
+    if proposal
+        .reviews
+        .iter()
+        .any(|r| r.reviewer_did == reviewer_did)
+    {
         return Err("reviewer has already submitted a review".into());
     }
 
@@ -270,14 +294,23 @@ pub fn review_proposal(
     // Phase 3: Capture what the reviewer saw
     let mandate_view_hash = hex::encode(Sha256::digest(proposal.mandate_body.as_bytes()));
     let approval_context_hash = hex::encode(Sha256::digest(
-        format!("{}:{}:{}", mandate_view_hash, proposal.risk_level, proposal.proposal_hash).as_bytes()
+        format!(
+            "{}:{}:{}",
+            mandate_view_hash, proposal.risk_level, proposal.proposal_hash
+        )
+        .as_bytes(),
     ));
 
     // Sign the review with domain separation (includes mandate_view_hash)
     let review_data = format!(
         "{}:{}:{}:{}:{}:{}:{}",
-        review_id, reviewer_did, proposal.proposal_hash,
-        decision, reason, now.to_rfc3339(), mandate_view_hash,
+        review_id,
+        reviewer_did,
+        proposal.proposal_hash,
+        decision,
+        reason,
+        now.to_rfc3339(),
+        mandate_view_hash,
     );
     let review_payload = format!("REVIEW:{}", review_data);
     let sig = signing_key.sign(review_payload.as_bytes());
@@ -303,7 +336,9 @@ pub fn review_proposal(
             proposal.status = ProposalStatus::Rejected;
         }
         ReviewDecision::Approve => {
-            let approvals = proposal.reviews.iter()
+            let approvals = proposal
+                .reviews
+                .iter()
                 .filter(|r| r.decision == ReviewDecision::Approve)
                 .count();
             if approvals >= proposal.required_approvals {
@@ -319,21 +354,33 @@ pub fn review_proposal(
 }
 
 /// Verify a review's signature
-pub fn verify_review(review: &Review, proposal_hash: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn verify_review(
+    review: &Review,
+    proposal_hash: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let pubkey_bytes = hex::decode(&review.reviewer_pubkey)?;
-    let pubkey_arr: [u8; 32] = pubkey_bytes.as_slice().try_into()
+    let pubkey_arr: [u8; 32] = pubkey_bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| "invalid reviewer public key")?;
     let verifying_key = VerifyingKey::from_bytes(&pubkey_arr)?;
 
     let sig_bytes = hex::decode(&review.signature)?;
-    let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into()
+    let sig_arr: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| "invalid review signature")?;
     let signature = Signature::from_bytes(&sig_arr);
 
     let review_data = format!(
         "{}:{}:{}:{}:{}:{}:{}",
-        review.review_id, review.reviewer_did, proposal_hash,
-        review.decision, review.reason, review.reviewed_at, review.mandate_view_hash,
+        review.review_id,
+        review.reviewer_did,
+        proposal_hash,
+        review.decision,
+        review.reason,
+        review.reviewed_at,
+        review.mandate_view_hash,
     );
     let review_payload = format!("REVIEW:{}", review_data);
 
@@ -365,17 +412,25 @@ mod tests {
 
         // Create proposal
         let mut proposal = create_proposal(
-            &proposer_did, "Deploy test agent", &template,
-            "Need read/write access for data processing", 48,
-        ).unwrap();
+            &proposer_did,
+            "Deploy test agent",
+            &template,
+            "Need read/write access for data processing",
+            48,
+        )
+        .unwrap();
 
         assert_eq!(proposal.status, ProposalStatus::Pending);
 
         // Submit approval
         let review = review_proposal(
-            &mut proposal, &reviewer1_secret, "Alice",
-            ReviewDecision::Approve, "Looks good, scope is appropriate",
-        ).unwrap();
+            &mut proposal,
+            &reviewer1_secret,
+            "Alice",
+            ReviewDecision::Approve,
+            "Looks good, scope is appropriate",
+        )
+        .unwrap();
 
         // Low risk needs 1 approval — should be approved now
         if proposal.risk_level == RiskLevel::Low {
@@ -394,14 +449,22 @@ mod tests {
         let template = crate::mandate::generate_template("test-agent", &proposer_did);
 
         let mut proposal = create_proposal(
-            &proposer_did, "Risky agent", &template,
-            "Needs broad access", 48,
-        ).unwrap();
+            &proposer_did,
+            "Risky agent",
+            &template,
+            "Needs broad access",
+            48,
+        )
+        .unwrap();
 
         review_proposal(
-            &mut proposal, &reviewer_secret, "Bob",
-            ReviewDecision::Reject, "Scope too broad, reduce tools",
-        ).unwrap();
+            &mut proposal,
+            &reviewer_secret,
+            "Bob",
+            ReviewDecision::Reject,
+            "Scope too broad, reduce tools",
+        )
+        .unwrap();
 
         assert_eq!(proposal.status, ProposalStatus::Rejected);
     }
@@ -413,23 +476,32 @@ mod tests {
 
         let template = crate::mandate::generate_template("test-agent", &proposer_did);
 
-        let mut proposal = create_proposal(
-            &proposer_did, "Test agent", &template, "Testing", 48,
-        ).unwrap();
+        let mut proposal =
+            create_proposal(&proposer_did, "Test agent", &template, "Testing", 48).unwrap();
 
         // Use RequestChanges so proposal stays Pending (Approve on low-risk would finalize it)
         review_proposal(
-            &mut proposal, &reviewer_secret, "Alice",
-            ReviewDecision::RequestChanges, "Needs minor tweaks",
-        ).unwrap();
+            &mut proposal,
+            &reviewer_secret,
+            "Alice",
+            ReviewDecision::RequestChanges,
+            "Needs minor tweaks",
+        )
+        .unwrap();
 
         // Same reviewer tries again — should be blocked
         let result = review_proposal(
-            &mut proposal, &reviewer_secret, "Alice",
-            ReviewDecision::Approve, "OK now",
+            &mut proposal,
+            &reviewer_secret,
+            "Alice",
+            ReviewDecision::Approve,
+            "OK now",
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("already submitted"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("already submitted"));
     }
 }

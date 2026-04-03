@@ -64,11 +64,13 @@ fn reconstruct_recursive(
         return Err(format!(
             "lineage reconstruction exceeded max depth of {} (possible circular reference)",
             max_depth
-        ).into());
+        )
+        .into());
     }
 
     // Look up the receipt in the ledger
-    let entry = db.query_decision_by_id(receipt_id_or_hash)?
+    let entry = db
+        .query_decision_by_id(receipt_id_or_hash)?
         .ok_or_else(|| format!("receipt '{}' not found in ledger", receipt_id_or_hash))?;
 
     // Assess completeness

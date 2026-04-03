@@ -87,10 +87,18 @@ pub struct Limits {
     pub max_session_duration_sec: u64,
 }
 
-fn default_rate() -> u64 { 60 }
-fn default_file_size() -> u64 { 10_485_760 }
-fn default_tokens() -> u64 { 4096 }
-fn default_session() -> u64 { 3600 }
+fn default_rate() -> u64 {
+    60
+}
+fn default_file_size() -> u64 {
+    10_485_760
+}
+fn default_tokens() -> u64 {
+    4096
+}
+fn default_session() -> u64 {
+    3600
+}
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct OutputGovernance {
@@ -102,7 +110,9 @@ pub struct OutputGovernance {
     pub max_output_length: u64,
 }
 
-fn default_output_len() -> u64 { 50_000 }
+fn default_output_len() -> u64 {
+    50_000
+}
 
 /// Jurisdictional binding — where and when this mandate is valid
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -151,10 +161,7 @@ pub struct MandateSignature {
 
 /// Sanitize an agent name: strip control characters, cap length
 pub fn sanitize_name(name: &str) -> String {
-    let cleaned: String = name.chars()
-        .filter(|c| !c.is_control())
-        .take(256)
-        .collect();
+    let cleaned: String = name.chars().filter(|c| !c.is_control()).take(256).collect();
     cleaned
 }
 
@@ -299,10 +306,7 @@ pub fn verify_mandate(mandate_str: &str) -> Result<MandateInfo, Box<dyn std::err
     let mandate: Mandate = toml::from_str(mandate_str)?;
 
     // 1. Check signature exists
-    let sig = mandate
-        .signature
-        .as_ref()
-        .ok_or("mandate is unsigned")?;
+    let sig = mandate.signature.as_ref().ok_or("mandate is unsigned")?;
 
     // 2. Verify signature algorithm
     if sig.algorithm != "ed25519" {
@@ -318,12 +322,16 @@ pub fn verify_mandate(mandate_str: &str) -> Result<MandateInfo, Box<dyn std::err
 
     // 4. Verify ed25519 signature
     let pubkey_bytes = hex::decode(&sig_clone.issuer_pubkey)?;
-    let pubkey_arr: [u8; 32] = pubkey_bytes.as_slice().try_into()
+    let pubkey_arr: [u8; 32] = pubkey_bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| "invalid public key length")?;
     let verifying_key = VerifyingKey::from_bytes(&pubkey_arr)?;
 
     let sig_bytes = hex::decode(&sig_clone.signature)?;
-    let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into()
+    let sig_arr: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| "invalid signature length")?;
     let signature = Signature::from_bytes(&sig_arr);
 
@@ -342,8 +350,7 @@ pub fn verify_mandate(mandate_str: &str) -> Result<MandateInfo, Box<dyn std::err
     if ttl_remaining <= 0 {
         return Err(format!(
             "mandate expired at {} ({} seconds ago)",
-            expires_at,
-            -ttl_remaining
+            expires_at, -ttl_remaining
         )
         .into());
     }

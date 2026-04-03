@@ -125,7 +125,10 @@ pub fn create_root_delegation(
     let signing_key = SigningKey::from_bytes(&secret_arr);
     let verifying_key = signing_key.verifying_key();
     let pubkey_hex = hex::encode(verifying_key.to_bytes());
-    let root_did = format!("did:a2g:{}", bs58::encode(verifying_key.to_bytes()).into_string());
+    let root_did = format!(
+        "did:a2g:{}",
+        bs58::encode(verifying_key.to_bytes()).into_string()
+    );
 
     let now = Utc::now();
     let expires = now + Duration::hours(ttl_hours as i64);
@@ -137,9 +140,16 @@ pub fn create_root_delegation(
     // Build the content to hash and sign
     let delegation_data = format!(
         "{}:{}:{}:{}:{:?}:{:?}:{:?}:{}:{}:{}",
-        delegation_id, root_did, root_did, root_name,
-        AuthorityLevel::Root, scope, jurisdiction,
-        now.to_rfc3339(), expires.to_rfc3339(), genesis_hash,
+        delegation_id,
+        root_did,
+        root_did,
+        root_name,
+        AuthorityLevel::Root,
+        scope,
+        jurisdiction,
+        now.to_rfc3339(),
+        expires.to_rfc3339(),
+        genesis_hash,
     );
     let sig_payload = format!("DELEGATION:{}", delegation_data);
     let content_hash = hex::encode(Sha256::digest(sig_payload.as_bytes()));
@@ -180,14 +190,17 @@ pub fn delegate(
         return Err(format!(
             "cannot delegate {} authority from {} level",
             level, parent_delegation.level
-        ).into());
+        )
+        .into());
     }
 
     // Verify scope is a subset of parent's scope
     validate_scope_subset(&scope, &parent_delegation.scope)?;
 
     // Verify TTL doesn't exceed parent's remaining TTL
-    let parent_expires = parent_delegation.expires_at.parse::<DateTime<Utc>>()
+    let parent_expires = parent_delegation
+        .expires_at
+        .parse::<DateTime<Utc>>()
         .map_err(|_| "invalid parent expires_at")?;
     let now = Utc::now();
     let parent_remaining_hours = (parent_expires - now).num_hours();
@@ -195,7 +208,8 @@ pub fn delegate(
         return Err(format!(
             "requested TTL ({} hours) exceeds parent's remaining TTL ({} hours)",
             ttl_hours, parent_remaining_hours
-        ).into());
+        )
+        .into());
     }
 
     let secret_bytes = hex::decode(grantor_secret_hex)?;
@@ -213,7 +227,8 @@ pub fn delegate(
         return Err(format!(
             "key-DID mismatch: signing key derives to '{}' but parent grantee is '{}'",
             grantor_did_from_key, parent_delegation.grantee_did
-        ).into());
+        )
+        .into());
     }
 
     let expires = now + Duration::hours(ttl_hours as i64);
@@ -221,9 +236,16 @@ pub fn delegate(
 
     let delegation_data = format!(
         "{}:{}:{}:{}:{:?}:{:?}:{:?}:{}:{}:{}",
-        delegation_id, parent_delegation.grantee_did, grantee_did, grantee_name,
-        level, scope, jurisdiction,
-        now.to_rfc3339(), expires.to_rfc3339(), parent_delegation.delegation_hash,
+        delegation_id,
+        parent_delegation.grantee_did,
+        grantee_did,
+        grantee_name,
+        level,
+        scope,
+        jurisdiction,
+        now.to_rfc3339(),
+        expires.to_rfc3339(),
+        parent_delegation.delegation_hash,
     );
     let sig_payload = format!("DELEGATION:{}", delegation_data);
     let content_hash = hex::encode(Sha256::digest(sig_payload.as_bytes()));
@@ -250,12 +272,16 @@ pub fn delegate(
 pub fn verify_delegation(delegation: &Delegation) -> Result<(), Box<dyn std::error::Error>> {
     // Verify signature
     let pubkey_bytes = hex::decode(&delegation.grantor_pubkey)?;
-    let pubkey_arr: [u8; 32] = pubkey_bytes.as_slice().try_into()
+    let pubkey_arr: [u8; 32] = pubkey_bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| "invalid public key length")?;
     let verifying_key = VerifyingKey::from_bytes(&pubkey_arr)?;
 
     let sig_bytes = hex::decode(&delegation.signature)?;
-    let sig_arr: [u8; 64] = sig_bytes.as_slice().try_into()
+    let sig_arr: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
         .map_err(|_| "invalid signature length")?;
     let signature = Signature::from_bytes(&sig_arr);
 
@@ -265,7 +291,9 @@ pub fn verify_delegation(delegation: &Delegation) -> Result<(), Box<dyn std::err
     // so verification uses the hash directly
 
     // Verify TTL
-    let expires = delegation.expires_at.parse::<DateTime<Utc>>()
+    let expires = delegation
+        .expires_at
+        .parse::<DateTime<Utc>>()
         .map_err(|_| "invalid expires_at")?;
     if Utc::now() >= expires {
         return Err("delegation expired".into());
@@ -299,21 +327,23 @@ pub fn verify_chain(chain: &[Delegation]) -> Result<ChainValidation, Box<dyn std
         // Verify chain linking (except root)
         if i > 0 {
             if d.parent_delegation_hash != chain[i - 1].delegation_hash {
-                return Err(format!(
-                    "chain broken at delegation {}: parent_hash mismatch", i
-                ).into());
+                return Err(
+                    format!("chain broken at delegation {}: parent_hash mismatch", i).into(),
+                );
             }
             // Verify grantor matches previous grantee
             if d.grantor_did != chain[i - 1].grantee_did {
                 return Err(format!(
-                    "chain broken at delegation {}: grantor is not previous grantee", i
-                ).into());
+                    "chain broken at delegation {}: grantor is not previous grantee",
+                    i
+                )
+                .into());
             }
             // Verify authority level decreases (numeric value increases: Root(0) < Dept(1) < Team(2) < Op(3))
             if d.level <= chain[i - 1].level {
-                return Err(format!(
-                    "chain broken at delegation {}: level does not decrease", i
-                ).into());
+                return Err(
+                    format!("chain broken at delegation {}: level does not decrease", i).into(),
+                );
             }
         }
     }
@@ -345,8 +375,10 @@ pub fn validate_mandate_against_authority(
             && !delegation.scope.allowed_tools.contains(tool)
         {
             return Err(format!(
-                "authority scope violation: tool '{}' not in authority's allowed_tools", tool
-            ).into());
+                "authority scope violation: tool '{}' not in authority's allowed_tools",
+                tool
+            )
+            .into());
         }
     }
 
@@ -357,7 +389,8 @@ pub fn validate_mandate_against_authority(
         return Err(format!(
             "authority scope violation: rate limit {} exceeds authority max {}",
             m.limits.max_calls_per_minute, delegation.scope.max_rate_limit
-        ).into());
+        )
+        .into());
     }
 
     // Check jurisdiction context
@@ -381,7 +414,8 @@ pub fn check_jurisdiction(jurisdiction: &Jurisdiction) -> Result<(), Box<dyn std
                 return Err(format!(
                     "jurisdiction violation: current time {} is outside operating hours {}",
                     hour_min, jurisdiction.operating_hours
-                ).into());
+                )
+                .into());
             }
         }
     }
@@ -403,7 +437,9 @@ fn compute_effective_scope(chain: &[Delegation]) -> AuthorityScope {
             if scope.allowed_tools.is_empty() {
                 scope.allowed_tools = d.scope.allowed_tools.clone();
             } else {
-                scope.allowed_tools.retain(|t| d.scope.allowed_tools.contains(t));
+                scope
+                    .allowed_tools
+                    .retain(|t| d.scope.allowed_tools.contains(t));
             }
         }
 
@@ -436,8 +472,10 @@ fn validate_scope_subset(
         for tool in &child.allowed_tools {
             if !parent.allowed_tools.contains(tool) {
                 return Err(format!(
-                    "scope violation: tool '{}' not in parent's allowed_tools", tool
-                ).into());
+                    "scope violation: tool '{}' not in parent's allowed_tools",
+                    tool
+                )
+                .into());
             }
         }
     }
@@ -447,7 +485,8 @@ fn validate_scope_subset(
         return Err(format!(
             "scope violation: max_ttl_hours {} exceeds parent's {}",
             child.max_ttl_hours, parent.max_ttl_hours
-        ).into());
+        )
+        .into());
     }
 
     // Child rate limit cannot exceed parent
@@ -455,7 +494,8 @@ fn validate_scope_subset(
         return Err(format!(
             "scope violation: max_rate_limit {} exceeds parent's {}",
             child.max_rate_limit, parent.max_rate_limit
-        ).into());
+        )
+        .into());
     }
 
     Ok(())
@@ -491,9 +531,9 @@ mod tests {
     #[test]
     fn test_root_delegation() {
         let (_, secret, _) = identity::generate_agent_keypair();
-        let root = create_root_delegation(
-            &secret, "Org Root", test_scope(), test_jurisdiction(), 720,
-        ).unwrap();
+        let root =
+            create_root_delegation(&secret, "Org Root", test_scope(), test_jurisdiction(), 720)
+                .unwrap();
 
         assert_eq!(root.level, AuthorityLevel::Root);
         assert_eq!(root.grantor_did, root.grantee_did);
@@ -509,8 +549,13 @@ mod tests {
 
         // Root delegates to department
         let root = create_root_delegation(
-            &root_secret, "Org Root", test_scope(), test_jurisdiction(), 720,
-        ).unwrap();
+            &root_secret,
+            "Org Root",
+            test_scope(),
+            test_jurisdiction(),
+            720,
+        )
+        .unwrap();
 
         let dept_scope = AuthorityScope {
             allowed_tools: vec!["read_file".into(), "write_file".into()],
@@ -521,9 +566,16 @@ mod tests {
         };
 
         let dept = delegate(
-            &root_secret, &root, &dept_did, "Engineering",
-            AuthorityLevel::Department, dept_scope.clone(), test_jurisdiction(), 168,
-        ).unwrap();
+            &root_secret,
+            &root,
+            &dept_did,
+            "Engineering",
+            AuthorityLevel::Department,
+            dept_scope.clone(),
+            test_jurisdiction(),
+            168,
+        )
+        .unwrap();
 
         // Department delegates to team
         let team_scope = AuthorityScope {
@@ -535,9 +587,16 @@ mod tests {
         };
 
         let team = delegate(
-            &dept_secret, &dept, &team_did, "Backend Team",
-            AuthorityLevel::Team, team_scope, test_jurisdiction(), 24,
-        ).unwrap();
+            &dept_secret,
+            &dept,
+            &team_did,
+            "Backend Team",
+            AuthorityLevel::Team,
+            team_scope,
+            test_jurisdiction(),
+            24,
+        )
+        .unwrap();
 
         // Verify the full chain
         let chain = vec![root, dept, team];
@@ -546,7 +605,10 @@ mod tests {
         assert_eq!(validation.chain_depth, 3);
 
         // Effective scope should be intersection
-        assert_eq!(validation.effective_scope.allowed_tools, vec!["read_file".to_string()]);
+        assert_eq!(
+            validation.effective_scope.allowed_tools,
+            vec!["read_file".to_string()]
+        );
         assert_eq!(validation.effective_scope.max_ttl_hours, 24);
         assert_eq!(validation.effective_scope.max_rate_limit, 30);
     }
@@ -562,9 +624,9 @@ mod tests {
             ..Default::default()
         };
 
-        let root = create_root_delegation(
-            &root_secret, "Root", root_scope, test_jurisdiction(), 720,
-        ).unwrap();
+        let root =
+            create_root_delegation(&root_secret, "Root", root_scope, test_jurisdiction(), 720)
+                .unwrap();
 
         // Try to delegate with tools not in parent scope
         let bad_scope = AuthorityScope {
@@ -574,8 +636,14 @@ mod tests {
         };
 
         let result = delegate(
-            &root_secret, &root, &dept_did, "Bad Dept",
-            AuthorityLevel::Department, bad_scope, test_jurisdiction(), 24,
+            &root_secret,
+            &root,
+            &dept_did,
+            "Bad Dept",
+            AuthorityLevel::Department,
+            bad_scope,
+            test_jurisdiction(),
+            24,
         );
 
         assert!(result.is_err());
@@ -587,8 +655,12 @@ mod tests {
         let (_, secret, _) = identity::generate_agent_keypair();
         // Create a delegation with 0 hours TTL (already expired)
         let result = create_root_delegation(
-            &secret, "Expired Root",
-            AuthorityScope { max_ttl_hours: 1, ..Default::default() },
+            &secret,
+            "Expired Root",
+            AuthorityScope {
+                max_ttl_hours: 1,
+                ..Default::default()
+            },
             Jurisdiction::default(),
             0, // 0 hours = expires immediately
         );

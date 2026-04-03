@@ -11,16 +11,18 @@ fn classify_severity(decision: &str, policy_rule: &str) -> (&'static str, &'stat
     match decision {
         "DENY" => {
             if policy_rule.contains("boundary") || policy_rule.contains("revoked") {
-                ("HIGH", "\x1b[91m")  // bright red
-            } else if policy_rule.contains("unauthorized") || policy_rule.contains("tool_not_in_allow_list") {
+                ("HIGH", "\x1b[91m") // bright red
+            } else if policy_rule.contains("unauthorized")
+                || policy_rule.contains("tool_not_in_allow_list")
+            {
                 ("HIGH", "\x1b[91m")
             } else {
-                ("MEDIUM", "\x1b[93m")  // yellow
+                ("MEDIUM", "\x1b[93m") // yellow
             }
         }
         "ESCALATE" => ("MEDIUM", "\x1b[93m"),
         "EXPIRED" => ("HIGH", "\x1b[91m"),
-        "ALLOW" => ("NONE", "\x1b[92m"),  // green
+        "ALLOW" => ("NONE", "\x1b[92m"), // green
         _ => ("LOW", "\x1b[37m"),
     }
 }
@@ -74,33 +76,61 @@ pub fn render_terminal(
     let mut out = String::new();
 
     // Header
-    out.push_str(&format!("\n{bold}{cyan}╔══════════════════════════════════════════════════════════════╗{reset}\n"));
+    out.push_str(&format!(
+        "\n{bold}{cyan}╔══════════════════════════════════════════════════════════════╗{reset}\n"
+    ));
     out.push_str(&format!("{bold}{cyan}║{reset}  {bold}{white}A2G GOVERNANCE RECEIPT{reset}                                     {bold}{cyan}║{reset}\n"));
-    out.push_str(&format!("{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"));
+    out.push_str(&format!(
+        "{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"
+    ));
 
     // Decision
-    out.push_str(&format!("{bold}{cyan}║{reset}  Decision:   {decision_icon:<52}{bold}{cyan}║{reset}\n"));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  Decision:   {decision_icon:<52}{bold}{cyan}║{reset}\n"
+    ));
     if severity != "NONE" {
         out.push_str(&format!("{bold}{cyan}║{reset}  Severity:   {sev_color}{bold}{severity:<50}{reset}{bold}{cyan}║{reset}\n"));
     }
-    out.push_str(&format!("{bold}{cyan}║{reset}  Tool:       {white}{:<50}{reset}{bold}{cyan}║{reset}\n", entry.tool));
-    out.push_str(&format!("{bold}{cyan}║{reset}  Rule:       {dim}{:<50}{reset}{bold}{cyan}║{reset}\n", truncate_str(&entry.policy_rule, 50)));
-    out.push_str(&format!("{bold}{cyan}║{reset}  Agent:      {dim}{:<50}{reset}{bold}{cyan}║{reset}\n", truncate_str(&entry.agent_did, 50)));
-    out.push_str(&format!("{bold}{cyan}║{reset}  Timestamp:  {dim}{:<50}{reset}{bold}{cyan}║{reset}\n", &entry.timestamp));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  Tool:       {white}{:<50}{reset}{bold}{cyan}║{reset}\n",
+        entry.tool
+    ));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  Rule:       {dim}{:<50}{reset}{bold}{cyan}║{reset}\n",
+        truncate_str(&entry.policy_rule, 50)
+    ));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  Agent:      {dim}{:<50}{reset}{bold}{cyan}║{reset}\n",
+        truncate_str(&entry.agent_did, 50)
+    ));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  Timestamp:  {dim}{:<50}{reset}{bold}{cyan}║{reset}\n",
+        &entry.timestamp
+    ));
 
     // Separator
-    out.push_str(&format!("{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"));
+    out.push_str(&format!(
+        "{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"
+    ));
     out.push_str(&format!("{bold}{cyan}║{reset}  {bold}{blue}HASH CHAIN{reset}                                                {bold}{cyan}║{reset}\n"));
     out.push_str(&format!("{bold}{cyan}║{reset}                                                              {bold}{cyan}║{reset}\n"));
 
     // Hash chain visualization
-    out.push_str(&format!("{bold}{cyan}║{reset}  {dim}prev{reset}  {magenta}{}{reset}  {bold}{cyan}║{reset}\n", truncate_str(prev, 52)));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  {dim}prev{reset}  {magenta}{}{reset}  {bold}{cyan}║{reset}\n",
+        truncate_str(prev, 52)
+    ));
     out.push_str(&format!("{bold}{cyan}║{reset}          {dim}│{reset}                                                   {bold}{cyan}║{reset}\n"));
     out.push_str(&format!("{bold}{cyan}║{reset}          {dim}▼{reset}                                                   {bold}{cyan}║{reset}\n"));
-    out.push_str(&format!("{bold}{cyan}║{reset}  {bold}this{reset}  {green}{}{reset}  {bold}{cyan}║{reset}\n", truncate_str(hash1, 52)));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  {bold}this{reset}  {green}{}{reset}  {bold}{cyan}║{reset}\n",
+        truncate_str(hash1, 52)
+    ));
 
     // Lineage section
-    out.push_str(&format!("{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"));
+    out.push_str(&format!(
+        "{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"
+    ));
     out.push_str(&format!("{bold}{cyan}║{reset}  {bold}{blue}LINEAGE{reset}                                                   {bold}{cyan}║{reset}\n"));
 
     if !entry.mandate_hash.is_empty() {
@@ -111,7 +141,10 @@ pub fn render_terminal(
             out.push_str(&format!("{bold}{cyan}║{reset}  Issuer:     {dim}{}{reset}                  {bold}{cyan}║{reset}\n", truncate_str(&lin.issuer_did, 38)));
         }
         if !lin.authority_level.is_empty() {
-            out.push_str(&format!("{bold}{cyan}║{reset}  Authority:  {white}{:<50}{reset}{bold}{cyan}║{reset}\n", lin.authority_level));
+            out.push_str(&format!(
+                "{bold}{cyan}║{reset}  Authority:  {white}{:<50}{reset}{bold}{cyan}║{reset}\n",
+                lin.authority_level
+            ));
         }
         if !lin.correlation_id.is_empty() {
             out.push_str(&format!("{bold}{cyan}║{reset}  Correlation: {dim}{}{reset}                     {bold}{cyan}║{reset}\n", truncate_str(&lin.correlation_id, 35)));
@@ -119,7 +152,9 @@ pub fn render_terminal(
     }
 
     // Status bar
-    out.push_str(&format!("{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"));
+    out.push_str(&format!(
+        "{bold}{cyan}╠══════════════════════════════════════════════════════════════╣{reset}\n"
+    ));
 
     let pass_fail = match entry.decision.as_str() {
         "ALLOW" => format!("{green}{bold}PASS{reset}"),
@@ -127,8 +162,13 @@ pub fn render_terminal(
     };
 
     out.push_str(&format!("{bold}{cyan}║{reset}  {pass_fail} | Chain: {chain_status} | Lineage: {lineage_status}            {bold}{cyan}║{reset}\n"));
-    out.push_str(&format!("{bold}{cyan}║{reset}  Receipt: {dim}{}{reset}    {bold}{cyan}║{reset}\n", truncate_str(&entry.receipt_id, 42)));
-    out.push_str(&format!("{bold}{cyan}╚══════════════════════════════════════════════════════════════╝{reset}\n"));
+    out.push_str(&format!(
+        "{bold}{cyan}║{reset}  Receipt: {dim}{}{reset}    {bold}{cyan}║{reset}\n",
+        truncate_str(&entry.receipt_id, 42)
+    ));
+    out.push_str(&format!(
+        "{bold}{cyan}╚══════════════════════════════════════════════════════════════╝{reset}\n"
+    ));
 
     // A2G branding
     out.push_str(&format!("                                        {dim}A2G Protocol • Deterministic Governance{reset}\n"));
@@ -160,12 +200,22 @@ pub fn render_html(
         d => d,
     };
 
-    let chain_html = if chain_intact { "INTACT ✓" } else { "BROKEN ✗" };
+    let chain_html = if chain_intact {
+        "INTACT ✓"
+    } else {
+        "BROKEN ✗"
+    };
     let chain_class = if chain_intact { "pass" } else { "fail" };
 
     let lineage_html = if let Some(lin) = lineage {
-        if lin.lineage_complete { "COMPLETE ✓" } else { "INCOMPLETE" }
-    } else { "N/A" };
+        if lin.lineage_complete {
+            "COMPLETE ✓"
+        } else {
+            "INCOMPLETE"
+        }
+    } else {
+        "N/A"
+    };
 
     let lineage_entries = if let Some(lin) = lineage {
         let mut entries = String::new();
@@ -192,7 +242,8 @@ pub fn render_html(
         _ => "fail",
     };
 
-    format!(r#"<!DOCTYPE html>
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -279,7 +330,9 @@ pub fn render_html(
         decision_icon = decision_icon,
         severity_html = if severity != "NONE" {
             format!("<span class=\"severity {}\">{}</span>", severity, severity)
-        } else { String::new() },
+        } else {
+            String::new()
+        },
         tool = html_escape(&entry.tool),
         rule = html_escape(&entry.policy_rule),
         agent = html_escape(&entry.agent_did),
@@ -288,7 +341,9 @@ pub fn render_html(
         receipt_hash = html_escape(&entry.receipt_hash),
         mandate_html = if !entry.mandate_hash.is_empty() {
             format!("<div class=\"field\"><span class=\"label\">Mandate:</span> <span class=\"value\">{}…</span></div>", &entry.mandate_hash[..std::cmp::min(16, entry.mandate_hash.len())])
-        } else { String::new() },
+        } else {
+            String::new()
+        },
         lineage_entries = lineage_entries,
         pass_fail = pass_fail,
         pass_class = pass_class,
@@ -355,7 +410,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-     .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

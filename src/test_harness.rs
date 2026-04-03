@@ -81,12 +81,18 @@ pub fn load_test_suite(path: &Path) -> Result<Vec<PolicyTest>, Box<dyn std::erro
 /// Run a suite of policy tests, optionally filtered by tag
 pub fn run_suite(tests: &[PolicyTest], tag: Option<&str>, ledger_path: &Path) -> Vec<TestResult> {
     let filtered: Vec<&PolicyTest> = if let Some(t) = tag {
-        tests.iter().filter(|test| test.tags.contains(&t.to_string())).collect()
+        tests
+            .iter()
+            .filter(|test| test.tags.contains(&t.to_string()))
+            .collect()
     } else {
         tests.iter().collect()
     };
 
-    filtered.iter().map(|test| run_single_test(test, ledger_path)).collect()
+    filtered
+        .iter()
+        .map(|test| run_single_test(test, ledger_path))
+        .collect()
 }
 
 /// Run a single policy test through the real enforcement pipeline
@@ -107,7 +113,12 @@ fn run_single_test(test: &PolicyTest, ledger_path: &Path) -> TestResult {
     } else if !test.mandate_path.is_empty() {
         match std::fs::read_to_string(&test.mandate_path) {
             Ok(s) => s,
-            Err(e) => return fail(format!("failed to read mandate '{}': {}", test.mandate_path, e)),
+            Err(e) => {
+                return fail(format!(
+                    "failed to read mandate '{}': {}",
+                    test.mandate_path, e
+                ))
+            }
         }
     } else {
         return fail("no mandate_path or mandate_inline specified".to_string());
@@ -138,14 +149,21 @@ fn run_single_test(test: &PolicyTest, ledger_path: &Path) -> TestResult {
             let actual_decision = format!("{}", verdict.decision);
             let actual_rule = verdict.policy_rule.clone();
 
-            let decision_match = actual_decision.to_uppercase() == test.expected_decision.to_uppercase();
+            let decision_match =
+                actual_decision.to_uppercase() == test.expected_decision.to_uppercase();
             let rule_match = test.expected_rule.is_empty() || actual_rule == test.expected_rule;
 
             let passed = decision_match && rule_match;
             let reason = if !decision_match {
-                format!("decision mismatch: expected {} got {}", test.expected_decision, actual_decision)
+                format!(
+                    "decision mismatch: expected {} got {}",
+                    test.expected_decision, actual_decision
+                )
             } else if !rule_match {
-                format!("rule mismatch: expected '{}' got '{}'", test.expected_rule, actual_rule)
+                format!(
+                    "rule mismatch: expected '{}' got '{}'",
+                    test.expected_rule, actual_rule
+                )
             } else {
                 String::new()
             };

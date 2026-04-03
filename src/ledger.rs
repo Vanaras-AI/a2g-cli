@@ -103,7 +103,7 @@ impl Ledger {
             );
 
             CREATE INDEX IF NOT EXISTS idx_revocations_agent ON revocations(agent_did);
-            CREATE INDEX IF NOT EXISTS idx_revocations_hash ON revocations(mandate_hash);"
+            CREATE INDEX IF NOT EXISTS idx_revocations_hash ON revocations(mandate_hash);",
         )?;
 
         // Phase 1-4: Lineage columns migration
@@ -124,7 +124,7 @@ impl Ledger {
         let _ = conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_mandate_hash ON decisions(mandate_hash);
              CREATE INDEX IF NOT EXISTS idx_correlation_id ON decisions(correlation_id);
-             CREATE INDEX IF NOT EXISTS idx_issuer_did ON decisions(issuer_did);"
+             CREATE INDEX IF NOT EXISTS idx_issuer_did ON decisions(issuer_did);",
         );
 
         // Phase 3: Proposal history table
@@ -142,7 +142,7 @@ impl Ledger {
                 approved_at TEXT DEFAULT NULL,
                 approval_context_hash TEXT DEFAULT ''
             );
-            CREATE INDEX IF NOT EXISTS idx_proposal_id ON proposal_history(proposal_id);"
+            CREATE INDEX IF NOT EXISTS idx_proposal_id ON proposal_history(proposal_id);",
         )?;
 
         // Re-enable triggers
@@ -214,8 +214,7 @@ impl Ledger {
         let now = Utc::now().to_rfc3339();
         let hash_input = format!(
             "{}:{}:{}:{}:{}:{}:{}:{}",
-            event_type, actor_did, target_did, action,
-            scope_hash, jurisdiction, now, details,
+            event_type, actor_did, target_did, action, scope_hash, jurisdiction, now, details,
         );
         let event_hash = hex::encode(sha2::Sha256::digest(hash_input.as_bytes()));
 
@@ -224,8 +223,17 @@ impl Ledger {
                 event_type, actor_did, target_did, action,
                 scope_hash, jurisdiction, timestamp, details, event_hash
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![event_type, actor_did, target_did, action,
-                    scope_hash, jurisdiction, now, details, event_hash],
+            params![
+                event_type,
+                actor_did,
+                target_did,
+                action,
+                scope_hash,
+                jurisdiction,
+                now,
+                details,
+                event_hash
+            ],
         )?;
         Ok(())
     }
@@ -256,8 +264,10 @@ impl Ledger {
         sql.push_str(&format!(" ORDER BY seq DESC LIMIT {}", limit));
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            bind_values.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
 
         let entries = stmt
             .query_map(params.as_slice(), |row| {
@@ -310,7 +320,10 @@ impl Ledger {
     }
 
     /// Check if a delegation has been revoked
-    pub fn is_delegation_revoked(&self, delegation_hash: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    pub fn is_delegation_revoked(
+        &self,
+        delegation_hash: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM revocations WHERE mandate_hash = ?1",
             rusqlite::params![delegation_hash],
@@ -405,11 +418,14 @@ impl Ledger {
 
         let result = (|| -> Result<crate::receipt::Receipt, Box<dyn std::error::Error>> {
             // Read last hash inside the exclusive write lock
-            let last_hash: Option<String> = self.conn.query_row(
-                "SELECT receipt_hash FROM decisions ORDER BY seq DESC LIMIT 1",
-                [],
-                |row| row.get(0),
-            ).optional()?;
+            let last_hash: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT receipt_hash FROM decisions ORDER BY seq DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
 
             // Initialize chain and generate receipt atomically
             crate::receipt::init_chain_from_ledger(last_hash);
@@ -502,8 +518,10 @@ impl Ledger {
 
         let mut stmt = self.conn.prepare(&sql)?;
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            bind_values.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
 
         let entries = stmt
             .query_map(params.as_slice(), |row| {
@@ -535,7 +553,17 @@ impl Ledger {
     }
 
     /// Log a proposal to the proposal_history table
-    pub fn log_proposal(&self, proposal_id: &str, proposer_did: &str, mandate_hash: &str, proposal_hash: &str, status: &str, risk_level: &str, required_approvals: usize, created_at: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn log_proposal(
+        &self,
+        proposal_id: &str,
+        proposer_did: &str,
+        mandate_hash: &str,
+        proposal_hash: &str,
+        status: &str,
+        risk_level: &str,
+        required_approvals: usize,
+        created_at: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.conn.execute(
             "INSERT INTO proposal_history (proposal_id, proposer_did, mandate_hash, proposal_hash, status, risk_level, required_approvals, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -545,69 +573,70 @@ impl Ledger {
     }
 
     /// Query a decision by receipt ID or receipt hash
-    pub fn query_decision_by_id(&self, receipt_id_or_hash: &str) -> Result<Option<LedgerEntry>, Box<dyn std::error::Error>> {
+    pub fn query_decision_by_id(
+        &self,
+        receipt_id_or_hash: &str,
+    ) -> Result<Option<LedgerEntry>, Box<dyn std::error::Error>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, receipt_id, agent_did, agent_name, tool, params_hash,
                     decision, policy_rule, timestamp, prev_hash, receipt_hash,
                     mandate_hash, proposal_hash, delegation_chain_hash,
                     issuer_did, authority_level, scope_hash,
                     correlation_id, parent_receipt_hash
-             FROM decisions WHERE receipt_id = ?1 OR receipt_hash = ?1 LIMIT 1"
+             FROM decisions WHERE receipt_id = ?1 OR receipt_hash = ?1 LIMIT 1",
         )?;
-        let result = stmt.query_row(params![receipt_id_or_hash], |row| {
-            Ok(LedgerEntry {
-                seq: row.get(0)?,
-                receipt_id: row.get(1)?,
-                agent_did: row.get(2)?,
-                agent_name: row.get(3)?,
-                tool: row.get(4)?,
-                params_hash: row.get(5)?,
-                decision: row.get(6)?,
-                policy_rule: row.get(7)?,
-                timestamp: row.get(8)?,
-                prev_hash: row.get(9)?,
-                receipt_hash: row.get(10)?,
-                mandate_hash: row.get(11)?,
-                proposal_hash: row.get(12)?,
-                delegation_chain_hash: row.get(13)?,
-                issuer_did: row.get(14)?,
-                authority_level: row.get(15)?,
-                scope_hash: row.get(16)?,
-                correlation_id: row.get(17)?,
-                parent_receipt_hash: row.get(18)?,
+        let result = stmt
+            .query_row(params![receipt_id_or_hash], |row| {
+                Ok(LedgerEntry {
+                    seq: row.get(0)?,
+                    receipt_id: row.get(1)?,
+                    agent_did: row.get(2)?,
+                    agent_name: row.get(3)?,
+                    tool: row.get(4)?,
+                    params_hash: row.get(5)?,
+                    decision: row.get(6)?,
+                    policy_rule: row.get(7)?,
+                    timestamp: row.get(8)?,
+                    prev_hash: row.get(9)?,
+                    receipt_hash: row.get(10)?,
+                    mandate_hash: row.get(11)?,
+                    proposal_hash: row.get(12)?,
+                    delegation_chain_hash: row.get(13)?,
+                    issuer_did: row.get(14)?,
+                    authority_level: row.get(15)?,
+                    scope_hash: row.get(16)?,
+                    correlation_id: row.get(17)?,
+                    parent_receipt_hash: row.get(18)?,
+                })
             })
-        }).optional()?;
+            .optional()?;
         Ok(result)
     }
 
     /// Get the last receipt hash in the ledger (for chain linking across process restarts)
     pub fn last_receipt_hash(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT receipt_hash FROM decisions ORDER BY seq DESC LIMIT 1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT receipt_hash FROM decisions ORDER BY seq DESC LIMIT 1")?;
 
-        let result: Option<String> = stmt
-            .query_row([], |row| row.get(0))
-            .ok();
+        let result: Option<String> = stmt.query_row([], |row| row.get(0)).ok();
 
         Ok(result)
     }
 
     /// Get the total number of entries in the ledger
     pub fn count_total(&self) -> Result<i64, Box<dyn std::error::Error>> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM decisions",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM decisions", [], |row| row.get(0))?;
         Ok(count)
     }
 
     /// Verify ledger chain integrity (check receipt hashes form a valid chain)
     pub fn verify_chain(&self) -> Result<(bool, usize), Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT receipt_hash, prev_hash FROM decisions ORDER BY seq ASC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT receipt_hash, prev_hash FROM decisions ORDER BY seq ASC")?;
 
         let entries: Vec<(String, String)> = stmt
             .query_map([], |row| {
@@ -649,32 +678,34 @@ impl Ledger {
                     correlation_id, parent_receipt_hash
              FROM decisions
              WHERE agent_did = ?1 AND timestamp >= ?2 AND timestamp <= ?3
-             ORDER BY seq ASC"
+             ORDER BY seq ASC",
         )?;
 
-        let entries = stmt.query_map(params![agent_did, start, end], |row| {
-            Ok(LedgerEntry {
-                seq: row.get(0)?,
-                receipt_id: row.get(1)?,
-                agent_did: row.get(2)?,
-                agent_name: row.get(3)?,
-                tool: row.get(4)?,
-                params_hash: row.get(5)?,
-                decision: row.get(6)?,
-                policy_rule: row.get(7)?,
-                timestamp: row.get(8)?,
-                prev_hash: row.get(9)?,
-                receipt_hash: row.get(10)?,
-                mandate_hash: row.get(11)?,
-                proposal_hash: row.get(12)?,
-                delegation_chain_hash: row.get(13)?,
-                issuer_did: row.get(14)?,
-                authority_level: row.get(15)?,
-                scope_hash: row.get(16)?,
-                correlation_id: row.get(17)?,
-                parent_receipt_hash: row.get(18)?,
-            })
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let entries = stmt
+            .query_map(params![agent_did, start, end], |row| {
+                Ok(LedgerEntry {
+                    seq: row.get(0)?,
+                    receipt_id: row.get(1)?,
+                    agent_did: row.get(2)?,
+                    agent_name: row.get(3)?,
+                    tool: row.get(4)?,
+                    params_hash: row.get(5)?,
+                    decision: row.get(6)?,
+                    policy_rule: row.get(7)?,
+                    timestamp: row.get(8)?,
+                    prev_hash: row.get(9)?,
+                    receipt_hash: row.get(10)?,
+                    mandate_hash: row.get(11)?,
+                    proposal_hash: row.get(12)?,
+                    delegation_chain_hash: row.get(13)?,
+                    issuer_did: row.get(14)?,
+                    authority_level: row.get(15)?,
+                    scope_hash: row.get(16)?,
+                    correlation_id: row.get(17)?,
+                    parent_receipt_hash: row.get(18)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(entries)
     }
