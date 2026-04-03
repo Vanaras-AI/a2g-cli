@@ -457,12 +457,12 @@ fn canonicalize_path(raw: &str) -> String {
     }
 }
 
-/// Glob matching for path patterns
+/// Glob matching for path patterns.
 ///
 /// Supports:
-///   **     — matches any number of path segments (including zero)
-///   *      — matches any characters within a single segment
-///   exact  — exact string match
+/// - `**` matches any number of path segments (including zero)
+/// - `*` matches any characters within a single segment
+/// - exact string match
 fn glob_matches(pattern: &str, path: &str) -> bool {
     // Handle ** (match any depth)
     if pattern.contains("**") {
